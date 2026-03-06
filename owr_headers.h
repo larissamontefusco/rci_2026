@@ -36,6 +36,15 @@ typedef struct no {
     int fd;
 } ID_NO;
 
+// Vizinho = aresta TCP
+typedef struct neighbor {
+    char id[3];
+    char ip[tamanho_ip];
+    char tcp[tamanho_porto];
+    int fd;
+    int outgoing; // 1 se connect() local, 0 se accept()
+} NEIGHBOR;
+
 /****************** Estrutura para armazenar informações de um nó ******************/
 typedef struct info_no {
     ID_NO id;                    // contacto local (IP/TCP)
@@ -47,6 +56,7 @@ typedef struct info_no {
     char node_id[3];             // "00".."99"
     int joined;                  // 1 se em rede
     int registered;              // 1 se registado no servidor de nós
+    NEIGHBOR neighbors[n_max_internos];
 } INFO_NO;
 
 // Validações
@@ -64,5 +74,19 @@ int parse_buffer(const char *buffer, int tamanho_buffer, char words[][100], int 
 int join(INFO_NO *no, const char *net, const char *id, const char *regIP, const char *regUDP);
 int direct_join(INFO_NO *no, const char *net, const char *id);
 int leave(INFO_NO *no, fd_set *master_set, int listen_fd, int *max_fd);
+
+// Arestas (overlay)
+int add_edge(INFO_NO *no, const char *id, fd_set *master_set, int *max_fd);
+int remove_edge(INFO_NO *no, const char *id, fd_set *master_set, int *max_fd);
+int direct_add_edge(INFO_NO *no, const char *id, const char *idIP, const char *idTCP,
+                    fd_set *master_set, int *max_fd);
+
+int show_nodes_cmd(const char *net, const char *regIP, const char *regUDP);
+void show_neighbors_cmd(const INFO_NO *no);
+// Helpers vizinhos
+int neighbor_find_by_id(const INFO_NO *no, const char *id);
+int neighbor_find_by_fd(const INFO_NO *no, int fd);
+int neighbor_alloc_slot(INFO_NO *no);
+void neighbor_clear_slot(INFO_NO *no, int idx);
 
 #endif
