@@ -30,6 +30,14 @@ static void print_prompt(void)
     fflush(stdout);
 }
 
+void clear_tcp_fd_state(int fd)
+{
+    if (fd >= 0 && fd < FD_SETSIZE)
+    {
+        rxlen[fd] = 0;
+        rxbuf[fd][0] = '\0';
+    }
+}
 static void drop_fd(INFO_NO *no, int fd)
 {
     int idx = neighbor_find_by_fd(no, fd);
@@ -38,13 +46,9 @@ static void drop_fd(INFO_NO *no, int fd)
 
     if (master_set)
         FD_CLR(fd, master_set);
-    close(fd);
 
-    if (fd >= 0 && fd < FD_SETSIZE)
-    {
-        rxlen[fd] = 0;
-        rxbuf[fd][0] = '\0';
-    }
+    close(fd);
+    clear_tcp_fd_state(fd);
 }
 
 static int prefer_outgoing(const char *my_id, const char *other_id)
@@ -78,6 +82,15 @@ static void handle_neighbor_message(INFO_NO *no, int fd, const char *line)
         printf("[OK] vizinho identificado: fd=%d id=%s\n", fd, id);
     }
 
+    /* novo caso: já havia um id guardado, mas o peer anunciou outro */
+    else if (strcmp(no->neighbors[idx].id, id) != 0)
+    {
+        printf("[ERRO] Mismatch de vizinho no fd=%d: esperado=%s, recebido=%s. A fechar ligação.\n",
+               fd, no->neighbors[idx].id, id);
+
+        drop_fd(no, fd);
+        return;
+    }
     // deduplicar (max 1 aresta por par)
     int other_idx = neighbor_find_by_id(no, id);
     if (other_idx != -1 && other_idx != idx)

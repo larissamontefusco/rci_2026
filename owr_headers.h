@@ -88,5 +88,5 @@ int neighbor_find_by_id(const INFO_NO *no, const char *id);
 int neighbor_find_by_fd(const INFO_NO *no, int fd);
 int neighbor_alloc_slot(INFO_NO *no);
 void neighbor_clear_slot(INFO_NO *no, int idx);
-
+void clear_tcp_fd_state(int fd);
 #endif

@@ -114,15 +114,14 @@ static int next_tid(void)
     return rand() % 1000; // 000..999
 }
 
-
-
 // -------------------------
 // Neighbor helpers
 // -------------------------
 
 int neighbor_find_by_id(const INFO_NO *no, const char *id)
 {
-    if (!id || strlen(id) != 2) return -1;
+    if (!id || strlen(id) != 2)
+        return -1;
     for (int i = 0; i < n_max_internos; i++)
         if (no->neighbors[i].fd != -1 && strcmp(no->neighbors[i].id, id) == 0)
             return i;
@@ -132,27 +131,29 @@ int neighbor_find_by_id(const INFO_NO *no, const char *id)
 int neighbor_find_by_fd(const INFO_NO *no, int fd)
 {
     for (int i = 0; i < n_max_internos; i++)
-        if (no->neighbors[i].fd == fd) return i;
+        if (no->neighbors[i].fd == fd)
+            return i;
     return -1;
 }
 
 int neighbor_alloc_slot(INFO_NO *no)
 {
     for (int i = 0; i < n_max_internos; i++)
-        if (no->neighbors[i].fd == -1) return i;
+        if (no->neighbors[i].fd == -1)
+            return i;
     return -1;
 }
 
 void neighbor_clear_slot(INFO_NO *no, int idx)
 {
-    if (idx < 0 || idx >= n_max_internos) return;
+    if (idx < 0 || idx >= n_max_internos)
+        return;
     no->neighbors[idx].fd = -1;
     no->neighbors[idx].outgoing = 0;
     no->neighbors[idx].id[0] = '\0';
     no->neighbors[idx].ip[0] = '\0';
     no->neighbors[idx].tcp[0] = '\0';
 }
-
 
 // -------------------------
 // Validações
@@ -217,27 +218,33 @@ void inicializar_no(INFO_NO *no)
 
 int testa_formato_porto(char *porto)
 {
-    if (porto == NULL || *porto == '\0') return 1;
+    if (porto == NULL || *porto == '\0')
+        return 1;
     for (int i = 0; porto[i] != '\0'; i++)
-        if (!isdigit((unsigned char)porto[i])) return 1;
+        if (!isdigit((unsigned char)porto[i]))
+            return 1;
     int numero = atoi(porto);
     return (numero < 0 || numero > 65535) ? 1 : 0;
 }
 
 int testa_formato_rede(char *net)
 {
-    if (net == NULL || strlen(net) != 3) return 1;
+    if (net == NULL || strlen(net) != 3)
+        return 1;
     for (int i = 0; i < 3; i++)
-        if (!isdigit((unsigned char)net[i])) return 1;
+        if (!isdigit((unsigned char)net[i]))
+            return 1;
     int numero = atoi(net);
     return (numero < 0 || numero > 999) ? 1 : 0;
 }
 
 int testa_formato_id(char *id)
 {
-    if (id == NULL || strlen(id) != 2) return 1;
+    if (id == NULL || strlen(id) != 2)
+        return 1;
     for (int i = 0; i < 2; i++)
-        if (!isdigit((unsigned char)id[i])) return 1;
+        if (!isdigit((unsigned char)id[i]))
+            return 1;
     int numero = atoi(id);
     return (numero < 0 || numero > 99) ? 1 : 0;
 }
@@ -421,17 +428,40 @@ int join(INFO_NO *no, const char *net, const char *id, const char *regIP, const 
             return -1;
 
         int r_tid = -1, op = -1;
-        char r_net[4] = "";
-        char r_id[3] = "";
-        if (sscanf(resp, "REG %d %d %3s %2s", &r_tid, &op, r_net, r_id) != 4)
+
+        /* 1) parse mínimo obrigatório */
+        if (sscanf(resp, "REG %d %d", &r_tid, &op) != 2)
         {
             printf("[ERRO] Resposta REG mal formatada: %s\n", resp);
+            return -1;
+        }
+
+        if (r_tid != tid)
+        {
+            printf("[ERRO] TID inconsistente na resposta REG.\n");
+            return -1;
+        }
+
+        /* 2) tratar op */
+        if (op == 2)
+        {
+            printf("[ERRO] Servidor com base de dados cheia. Não foi possível registar o nó.\n");
             return -1;
         }
 
         if (op != 1)
         {
             printf("[ERRO] Servidor respondeu REG com op=%d (erro).\n", op);
+            return -1;
+        }
+
+        /* 3) como op=1, agora sim exigir net e id */
+        char r_net[4] = "";
+        char r_id[3] = "";
+
+        if (sscanf(resp, "REG %d %d %3s %2s", &r_tid, &op, r_net, r_id) != 4)
+        {
+            printf("[ERRO] Resposta REG mal formatada para op=1: %s\n", resp);
             return -1;
         }
 
@@ -483,10 +513,14 @@ int leave(INFO_NO *no, fd_set *master_set, int listen_fd, int *max_fd)
 
             close(fd);
             FD_CLR(fd, master_set);
+            clear_tcp_fd_state(fd);
         }
 
         *max_fd = (listen_fd > STDIN_FILENO) ? listen_fd : STDIN_FILENO;
     }
+    // 1.1) limpar completamente a tabela de vizinhos
+    for (int i = 0; i < n_max_internos; i++)
+        neighbor_clear_slot(no, i);
 
     // 2) se foi join (registado), então UNREG via REG op=3
     if (no->registered)
@@ -530,7 +564,6 @@ int leave(INFO_NO *no, fd_set *master_set, int listen_fd, int *max_fd)
     return 0;
 }
 
-
 // -------------------------
 // Arestas (ae / re / dae)
 // -------------------------
@@ -539,7 +572,8 @@ static int send_neighbor_hello(int fd, const char *my_id)
 {
     char msg[32];
     int n = snprintf(msg, sizeof(msg), "NEIGHBOR %s\n", my_id);
-    if (n < 0) return -1;
+    if (n < 0)
+        return -1;
     ssize_t w = write(fd, msg, (size_t)n);
     return (w == n) ? 0 : -1;
 }
@@ -547,25 +581,30 @@ static int send_neighbor_hello(int fd, const char *my_id)
 int direct_add_edge(INFO_NO *no, const char *id, const char *idIP, const char *idTCP,
                     fd_set *master_set, int *max_fd)
 {
-    if (!no->joined) {
+    if (!no->joined)
+    {
         printf("[ERRO] Tens de estar numa rede antes de criar arestas (join/dj).\n");
         return -1;
     }
-    if (testa_formato_id((char *)id) || testa_formato_ip((char *)idIP) || testa_formato_porto((char *)idTCP)) {
+    if (testa_formato_id((char *)id) || testa_formato_ip((char *)idIP) || testa_formato_porto((char *)idTCP))
+    {
         printf("[ERRO] Uso: dae id idIP idTCP\n");
         return -1;
     }
-    if (strcmp(id, no->node_id) == 0) {
+    if (strcmp(id, no->node_id) == 0)
+    {
         printf("[ERRO] Não podes ligar-te a ti próprio (id=%s).\n", id);
         return -1;
     }
-    if (neighbor_find_by_id(no, id) != -1) {
+    if (neighbor_find_by_id(no, id) != -1)
+    {
         printf("[ERRO] Já existe uma aresta com o nó %s.\n", id);
         return -1;
     }
 
     int slot = neighbor_alloc_slot(no);
-    if (slot == -1) {
+    if (slot == -1)
+    {
         printf("[ERRO] Limite de vizinhos atingido (%d).\n", n_max_internos);
         return -1;
     }
@@ -576,19 +615,22 @@ int direct_add_edge(INFO_NO *no, const char *id, const char *idIP, const char *i
     hints.ai_socktype = SOCK_STREAM;
 
     int err = getaddrinfo(idIP, idTCP, &hints, &res);
-    if (err != 0) {
+    if (err != 0)
+    {
         printf("[ERRO] getaddrinfo(%s,%s): %s\n", idIP, idTCP, gai_strerror(err));
         return -1;
     }
 
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd == -1) {
+    if (fd == -1)
+    {
         perror("[ERRO] socket(TCP)");
         freeaddrinfo(res);
         return -1;
     }
 
-    if (connect(fd, res->ai_addr, res->ai_addrlen) == -1) {
+    if (connect(fd, res->ai_addr, res->ai_addrlen) == -1)
+    {
         perror("[ERRO] connect");
         close(fd);
         freeaddrinfo(res);
@@ -606,8 +648,10 @@ int direct_add_edge(INFO_NO *no, const char *id, const char *idIP, const char *i
     no->neighbors[slot].fd = fd;
     no->neighbors[slot].outgoing = 1;
 
-    if (master_set) FD_SET(fd, master_set);
-    if (max_fd && fd > *max_fd) *max_fd = fd;
+    if (master_set)
+        FD_SET(fd, master_set);
+    if (max_fd && fd > *max_fd)
+        *max_fd = fd;
 
     (void)send_neighbor_hello(fd, no->node_id);
 
@@ -617,48 +661,87 @@ int direct_add_edge(INFO_NO *no, const char *id, const char *idIP, const char *i
 
 int add_edge(INFO_NO *no, const char *id, fd_set *master_set, int *max_fd)
 {
-    if (!no->joined) {
-        printf("[ERRO] Tens de estar numa rede antes de criar arestas (join).\n");
-        return -1;
-    }
-    if (!no->registered || no->net.regIP[0] == '\0' || no->net.regUDP[0] == '\0') {
-        printf("[ERRO] add edge requer join com servidor. Usa dae se estiveres em direct join.\n");
-        return -1;
-    }
-    if (testa_formato_id((char *)id)) {
-        printf("[ERRO] Uso: ae id\n");
-        return -1;
-    }
-    if (strcmp(id, no->node_id) == 0) {
-        printf("[ERRO] Não podes ligar-te a ti próprio (id=%s).\n", id);
-        return -1;
-    }
-    if (neighbor_find_by_id(no, id) != -1) {
-        printf("[ERRO] Já existe uma aresta com o nó %s.\n", id);
+    if (!no->joined)
+    {
+        printf("[ERRO] Não estás em nenhuma rede.\n");
         return -1;
     }
 
-    // CONTACT tid 0 net id
+    if (!no->registered)
+    {
+        printf("[ERRO] add edge requer 'join' normal (com servidor), não 'direct join'.\n");
+        return -1;
+    }
+
+    if (testa_formato_id((char *)id))
+    {
+        printf("[ERRO] Uso: ae id\n");
+        return -1;
+    }
+
+    if (strcmp(id, no->node_id) == 0)
+    {
+        printf("[ERRO] Não podes criar aresta contigo próprio.\n");
+        return -1;
+    }
+
+    if (neighbor_find_by_id(no, id) != -1)
+    {
+        printf("[ERRO] Já existe aresta com o nó %s.\n", id);
+        return -1;
+    }
+
     int tid = next_tid();
-    char req[128];
-    snprintf(req, sizeof(req), "CONTACT %03d 0 %s %s", tid, no->net.net_id, id);
+    char req[64];
+    snprintf(req, sizeof(req), "CONTACT %03d 0 %s %s\n", tid, no->net.net_id, id);
 
     char resp[256];
     if (udp_request_response(no->net.regIP, no->net.regUDP, req, resp, sizeof(resp), 5) < 0)
         return -1;
 
-    int op = -1;
-    char r_net[4] = "", r_id[3] = "", ip[tamanho_ip] = "", tcp[tamanho_porto] = "";
-    if (sscanf(resp, "CONTACT %*d %d %3s %2s %15s %5s", &op, r_net, r_id, ip, tcp) < 4) {
+    int r_tid = -1, op = -1;
+    char r_net[4] = "", r_id[3] = "";
+
+    /* 1) parse mínimo obrigatório */
+    if (sscanf(resp, "CONTACT %d %d %3s %2s", &r_tid, &op, r_net, r_id) != 4)
+    {
         printf("[ERRO] Resposta CONTACT mal formatada: %s\n", resp);
         return -1;
     }
-    if (op == 2) {
+
+    if (r_tid != tid)
+    {
+        printf("[ERRO] TID inconsistente na resposta CONTACT.\n");
+        return -1;
+    }
+
+    if (strcmp(r_net, no->net.net_id) != 0 || strcmp(r_id, id) != 0)
+    {
+        printf("[ERRO] Resposta CONTACT inconsistente (net/id).\n");
+        return -1;
+    }
+
+    /* 2) tratar op */
+    if (op == 2)
+    {
         printf("[ERRO] Nó %s não está registado na rede %s.\n", id, no->net.net_id);
         return -1;
     }
-    if (op != 1) {
+
+    if (op != 1)
+    {
         printf("[ERRO] CONTACT op=%d.\n", op);
+        return -1;
+    }
+
+    /* 3) como op=1, agora sim exigir IP e TCP */
+    char ip[tamanho_ip] = "";
+    char tcp[tamanho_porto] = "";
+
+    if (sscanf(resp, "CONTACT %d %d %3s %2s %15s %5s",
+               &r_tid, &op, r_net, r_id, ip, tcp) != 6)
+    {
+        printf("[ERRO] Resposta CONTACT mal formatada para op=1: %s\n", resp);
         return -1;
     }
 
@@ -669,24 +752,28 @@ int remove_edge(INFO_NO *no, const char *id, fd_set *master_set, int *max_fd)
 {
     (void)max_fd;
 
-    if (!no->joined) {
+    if (!no->joined)
+    {
         printf("[ERRO] Não estás em nenhuma rede.\n");
         return -1;
     }
-    if (testa_formato_id((char *)id)) {
+    if (testa_formato_id((char *)id))
+    {
         printf("[ERRO] Uso: re id\n");
         return -1;
     }
 
     int idx = neighbor_find_by_id(no, id);
-    if (idx == -1) {
+    if (idx == -1)
+    {
         printf("[ERRO] Não existe aresta com o nó %s.\n", id);
         return -1;
     }
 
     int fd = no->neighbors[idx].fd;
     close(fd);
-    if (master_set) FD_CLR(fd, master_set);
+    if (master_set)
+        FD_CLR(fd, master_set);
     neighbor_clear_slot(no, idx);
 
     printf("[OK] re: aresta removida com id=%s (fd=%d)\n", id, fd);
@@ -695,7 +782,8 @@ int remove_edge(INFO_NO *no, const char *id, fd_set *master_set, int *max_fd)
 
 int show_nodes_cmd(const char *net, const char *regIP, const char *regUDP)
 {
-    if (testa_formato_rede((char *)net)) {
+    if (testa_formato_rede((char *)net))
+    {
         printf("[ERRO] Uso: show nodes (n) net   (net=000..999)\n");
         return -1;
     }
@@ -709,7 +797,8 @@ int show_nodes_cmd(const char *net, const char *regIP, const char *regUDP)
 
     char resp[4096];
     int r = udp_request_response(regIP, regUDP, req, resp, sizeof(resp), 5);
-    if (r < 0) {
+    if (r < 0)
+    {
         // erro já foi impresso pelo helper (timeout/recv/send)
         return -1;
     }
@@ -717,19 +806,22 @@ int show_nodes_cmd(const char *net, const char *regIP, const char *regUDP)
     // Resposta: "NODES tid op net<LF>" seguido de ids, 1 por linha. :contentReference[oaicite:3]{index=3}
     char *saveptr = NULL;
     char *line = strtok_r(resp, "\n", &saveptr);
-    if (!line) {
+    if (!line)
+    {
         printf("[ERRO] Resposta NODES vazia.\n");
         return -1;
     }
 
     int op = -1;
     char rnet[4] = "";
-    if (sscanf(line, "NODES %*d %d %3s", &op, rnet) != 2) {
+    if (sscanf(line, "NODES %*d %d %3s", &op, rnet) != 2)
+    {
         printf("[ERRO] Resposta NODES mal formatada: %s\n", line);
         return -1;
     }
 
-    if (op != 1) {
+    if (op != 1)
+    {
         printf("[ERRO] NODES falhou (op=%d).\n", op);
         return -1;
     }
@@ -737,16 +829,19 @@ int show_nodes_cmd(const char *net, const char *regIP, const char *regUDP)
     printf("Nodes na rede %s:\n", rnet);
 
     int count = 0;
-    for (line = strtok_r(NULL, "\n", &saveptr); line != NULL; line = strtok_r(NULL, "\n", &saveptr)) {
+    for (line = strtok_r(NULL, "\n", &saveptr); line != NULL; line = strtok_r(NULL, "\n", &saveptr))
+    {
         // cada id deve ser "00".."99"
         char id[3] = "";
-        if (sscanf(line, "%2s", id) == 1 && !testa_formato_id(id)) {
+        if (sscanf(line, "%2s", id) == 1 && !testa_formato_id(id))
+        {
             printf("  %s\n", id);
             count++;
         }
     }
 
-    if (count == 0) {
+    if (count == 0)
+    {
         printf("  (sem nós)\n");
     }
 
@@ -755,7 +850,8 @@ int show_nodes_cmd(const char *net, const char *regIP, const char *regUDP)
 
 void show_neighbors_cmd(const INFO_NO *no)
 {
-    if (!no->joined) {
+    if (!no->joined)
+    {
         printf("[ERRO] Não estás em nenhuma rede.\n");
         return;
     }
@@ -763,21 +859,24 @@ void show_neighbors_cmd(const INFO_NO *no)
     printf("Vizinhos do nó %s (net=%s):\n", no->node_id, no->net.net_id[0] ? no->net.net_id : "???");
 
     int count = 0;
-    for (int i = 0; i < n_max_internos; i++) {
-        if (no->neighbors[i].fd == -1) continue;
+    for (int i = 0; i < n_max_internos; i++)
+    {
+        if (no->neighbors[i].fd == -1)
+            continue;
 
         const char *nid = (no->neighbors[i].id[0] ? no->neighbors[i].id : "??");
         const char *dir = (no->neighbors[i].outgoing ? "out" : "in");
 
         // ip/tcp podem estar vazios no caso de accept() (ainda não guardamos)
-        const char *ip  = (no->neighbors[i].ip[0]  ? no->neighbors[i].ip  : "-");
+        const char *ip = (no->neighbors[i].ip[0] ? no->neighbors[i].ip : "-");
         const char *tcp = (no->neighbors[i].tcp[0] ? no->neighbors[i].tcp : "-");
 
         printf("  id=%s  fd=%d  dir=%s  ip=%s  tcp=%s\n", nid, no->neighbors[i].fd, dir, ip, tcp);
         count++;
     }
 
-    if (count == 0) {
+    if (count == 0)
+    {
         printf("  (sem vizinhos)\n");
     }
 }
