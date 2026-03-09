@@ -410,7 +410,7 @@ int main(int argc, char **argv)
     printf("  add edge (ae) id\n");
     printf("  remove edge (re) id\n");
     printf("  direct add edge (dae) id idIP idTCP\n");
-     printf("  show neighbors (sg)\n");
+    printf("  show neighbors (sg)\n");
     printf("  leave (l)\n");
     printf("  exit (x)\n\n");
 
@@ -466,6 +466,13 @@ int main(int argc, char **argv)
                 }
                 else
                 {
+                    /* CORREÇÃO: se o nó não está numa rede, não pode aceitar arestas */
+                    if (!no.joined)
+                    {
+                        printf("[AVISO] Ligação recebida fora de rede; a rejeitar fd=%d.\n", new_fd);
+                        close(new_fd);
+                        continue;
+                    }
                     int slot = neighbor_alloc_slot(&no);
                     if (slot == -1)
                     {
@@ -477,16 +484,19 @@ int main(int argc, char **argv)
                         no.neighbors[slot].fd = new_fd;
                         no.neighbors[slot].outgoing = 0;
                         no.neighbors[slot].id[0] = '\0';
-                        
+                        no.neighbors[slot].ip[0] = '\0';
+                        no.neighbors[slot].tcp[0] = '\0';
+
                         // preencher ip/porto do peer (atenção: porto é o porto efémero da conexão)
                         struct sockaddr_storage peer;
                         socklen_t peerlen = sizeof(peer);
-                        if (getpeername(new_fd, (struct sockaddr *)&peer, &peerlen) == 0) {
-                            if (peer.ss_family == AF_INET) {
+                        if (getpeername(new_fd, (struct sockaddr *)&peer, &peerlen) == 0)
+                        {
+                            if (peer.ss_family == AF_INET)
+                            {
                                 struct sockaddr_in *sin = (struct sockaddr_in *)&peer;
                                 inet_ntop(AF_INET, &sin->sin_addr,
-                                        no.neighbors[slot].ip, sizeof(no.neighbors[slot].ip));
-                                
+                                          no.neighbors[slot].ip, sizeof(no.neighbors[slot].ip));
                             }
                         }
                         FD_SET(new_fd, &master_fds);
@@ -494,13 +504,11 @@ int main(int argc, char **argv)
                             max_fd = new_fd;
 
                         // envia o nosso id
-                        if (no.joined)
-                        {
-                            char msg[32];
-                            int n = snprintf(msg, sizeof(msg), "NEIGHBOR %s\n", no.node_id);
-                            if (n > 0)
-                                (void)write(new_fd, msg, (size_t)n);
-                        }
+
+                        char msg[32];
+                        int n = snprintf(msg, sizeof(msg), "NEIGHBOR %s\n", no.node_id);
+                        if (n > 0)
+                            (void)write(new_fd, msg, (size_t)n);
 
                         printf("[TCP] accepted fd=%d\n", new_fd);
                     }
