@@ -169,6 +169,8 @@ static void handle_tcp_lines(INFO_NO *no, int fd)
                 handle_neighbor_message(no, fd, line);
             else if (strncmp(line, "ANNOUNCE", 8) == 0)
                 handle_announce_message(no, fd, line);
+            else if (strncmp(line, "MSG ", 4) == 0)
+                handle_msg_message(no, fd, line);
             else
                 printf("[TCP] fd=%d line: %s\n", fd, line);
 
@@ -183,6 +185,40 @@ static void handle_tcp_lines(INFO_NO *no, int fd)
             memmove(rxbuf[fd], rxbuf[fd] + start, (size_t)remaining);
         rxlen[fd] = remaining;
     }
+}
+
+static int extract_message_args(const char *buffer, char *dest, size_t dest_sz, char *msg, size_t msg_sz)
+{
+    const char *p = buffer;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
+        p++;
+    while (*p == ' ' || *p == '\t')
+        p++;
+
+    size_t di = 0;
+    while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
+    {
+        if (di + 1 < dest_sz)
+            dest[di++] = *p;
+        p++;
+    }
+    dest[di] = '\0';
+
+    while (*p == ' ' || *p == '\t')
+        p++;
+
+    size_t mi = 0;
+    while (*p && *p != '\r' && *p != '\n')
+    {
+        if (mi + 1 < msg_sz)
+            msg[mi++] = *p;
+        p++;
+    }
+    msg[mi] = '\0';
+
+    return (dest[0] != '\0' && msg[0] != '\0') ? 0 : -1;
 }
 
 static int processa_comandos(const char *buffer, INFO_NO *no)
@@ -292,6 +328,33 @@ static int processa_comandos(const char *buffer, INFO_NO *no)
             return 0;
         }
         (void)leave(no, master_set, no->id.fd, &max_fd);
+        return 0;
+    }
+
+    if (strcmp(words[0], "sm") == 0 ||
+        (strcmp(words[0], "start") == 0 && argc_cmd >= 2 && strcmp(words[1], "monitor") == 0))
+    {
+        start_monitor_cmd(no);
+        return 0;
+    }
+
+    if (strcmp(words[0], "em") == 0 ||
+        (strcmp(words[0], "end") == 0 && argc_cmd >= 2 && strcmp(words[1], "monitor") == 0))
+    {
+        end_monitor_cmd(no);
+        return 0;
+    }
+
+    if (strcmp(words[0], "m") == 0 || strcmp(words[0], "message") == 0)
+    {
+        char dest[3] = "";
+        char msg[900] = "";
+        if (extract_message_args(buffer, dest, sizeof(dest), msg, sizeof(msg)) < 0)
+        {
+            printf("Uso: message (m) dest texto\n");
+            return 0;
+        }
+        (void)message_cmd(no, dest, msg);
         return 0;
     }
 
@@ -457,6 +520,9 @@ int main(int argc, char **argv)
     printf("  direct add edge (dae) id idIP idTCP\n");
     printf("  announce (a)\n");
     printf("  show routing (sr) dest\n");
+    printf("  start monitor (sm)\n");
+    printf("  end monitor (em)\n");
+    printf("  message (m) dest texto\n");
     printf("  show neighbors (sg)\n");
     printf("  leave (l)\n");
     printf("  exit (x)\n\n");

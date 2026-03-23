@@ -70,6 +70,7 @@ typedef struct info_no {
     int registered;              // 1 se registado no servidor de nós
     NEIGHBOR neighbors[n_max_internos];
     ROUTE_ENTRY routing[n_max_nos];
+    int monitor_on;              // 1 se monitorização de mensagens de encaminhamento ativa
 } INFO_NO;
 
 // Validações
@@ -103,7 +104,11 @@ void routing_init_self(INFO_NO *no);
 void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id);
 int announce_cmd(INFO_NO *no);
 void show_routing_cmd(const INFO_NO *no, const char *dest);
+void start_monitor_cmd(INFO_NO *no);
+void end_monitor_cmd(INFO_NO *no);
+int message_cmd(INFO_NO *no, const char *dest, const char *message);
 void handle_announce_message(INFO_NO *no, int fd, const char *line);
+void handle_msg_message(INFO_NO *no, int fd, const char *line);
 // Helpers vizinhos
 int neighbor_find_by_id(const INFO_NO *no, const char *id);
 int neighbor_find_by_fd(const INFO_NO *no, int fd);

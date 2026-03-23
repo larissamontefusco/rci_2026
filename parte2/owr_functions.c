@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#include <stdarg.h>
 
 #include "owr_headers.h"
 
@@ -134,13 +135,46 @@ static int send_all(int fd, const char *buf, size_t len)
     return 0;
 }
 
+static void trim_trailing_newline(char *s)
+{
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r'))
+    {
+        s[n - 1] = '\0';
+        n--;
+    }
+}
+
+static void monitor_log(const INFO_NO *no, const char *dir, int fd, const char *fmt, ...)
+{
+    if (!no || !no->monitor_on)
+        return;
+
+    char payload[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(payload, sizeof(payload), fmt, ap);
+    va_end(ap);
+    trim_trailing_newline(payload);
+
+    const char *peer_id = "??";
+    int idx = neighbor_find_by_fd(no, fd);
+    if (idx != -1 && no->neighbors[idx].id[0] != '\0')
+        peer_id = no->neighbors[idx].id;
+
+    printf("[MONITOR] %s fd=%d peer=%s %s\n", dir, fd, peer_id, payload);
+}
+
 static int send_announce_to_fd(const INFO_NO *no, int fd, const char *src_id, int dist)
 {
     char msg[64];
     int n = snprintf(msg, sizeof(msg), "ANNOUNCE %s %s %d\n", no->net.net_id, src_id, dist);
     if (n < 0 || (size_t)n >= sizeof(msg))
         return -1;
-    return send_all(fd, msg, (size_t)n);
+    if (send_all(fd, msg, (size_t)n) < 0)
+        return -1;
+    monitor_log(no, "TX", fd, "%s", msg);
+    return 0;
 }
 
 static void flood_announce_except(const INFO_NO *no, const char *src_id, int dist, int except_fd)
@@ -156,6 +190,18 @@ static void flood_announce_except(const INFO_NO *no, const char *src_id, int dis
             perror("[AVISO] write ANNOUNCE");
         }
     }
+}
+
+static int send_msg_to_fd(const INFO_NO *no, int fd, const char *src, const char *dest, const char *text)
+{
+    char msg[1024];
+    int n = snprintf(msg, sizeof(msg), "MSG %s %s %s\n", src, dest, text);
+    if (n < 0 || (size_t)n >= sizeof(msg))
+        return -1;
+    if (send_all(fd, msg, (size_t)n) < 0)
+        return -1;
+    monitor_log(no, "TX", fd, "%s", msg);
+    return 0;
 }
 
 void routing_reset(INFO_NO *no)
@@ -260,6 +306,77 @@ void show_routing_cmd(const INFO_NO *no, const char *dest)
     printf("Routing para destino %s: estado desconhecido.\n", dest);
 }
 
+void start_monitor_cmd(INFO_NO *no)
+{
+    no->monitor_on = 1;
+    printf("[OK] monitorização ativada.\n");
+}
+
+void end_monitor_cmd(INFO_NO *no)
+{
+    no->monitor_on = 0;
+    printf("[OK] monitorização desativada.\n");
+}
+
+int message_cmd(INFO_NO *no, const char *dest, const char *message)
+{
+    if (!no->joined)
+    {
+        printf("[ERRO] Não estás em nenhuma rede.\n");
+        return -1;
+    }
+
+    if (testa_formato_id((char *)dest))
+    {
+        printf("[ERRO] Uso: message (m) dest texto   (dest=00..99)\n");
+        return -1;
+    }
+
+    if (!message)
+        message = "";
+
+    while (*message == ' ' || *message == '\t')
+        message++;
+
+    if (*message == '\0')
+    {
+        printf("[ERRO] A mensagem não pode ser vazia.\n");
+        return -1;
+    }
+
+    if (strcmp(dest, no->node_id) == 0)
+    {
+        printf("[MSG] de %s para %s: %s\n", no->node_id, no->node_id, message);
+        return 0;
+    }
+
+    int ridx = id_to_index(dest);
+    if (ridx < 0 || ridx >= n_max_nos || !no->routing[ridx].valid ||
+        no->routing[ridx].state != ROUTE_STATE_FORWARD)
+    {
+        printf("[ERRO] Sem rota para o destino %s. Usa 'announce' e confirma com 'sr %s'.\n", dest, dest);
+        return -1;
+    }
+
+    int nidx = neighbor_find_by_id(no, no->routing[ridx].next_hop);
+    if (nidx == -1 || no->neighbors[nidx].fd == -1)
+    {
+        printf("[ERRO] Next-hop %s indisponível para o destino %s.\n",
+               no->routing[ridx].next_hop, dest);
+        return -1;
+    }
+
+    if (send_msg_to_fd(no, no->neighbors[nidx].fd, no->node_id, dest, message) < 0)
+    {
+        perror("[ERRO] write MSG");
+        return -1;
+    }
+
+    printf("[OK] mensagem enviada para destino=%s via vizinho=%s.\n",
+           dest, no->routing[ridx].next_hop);
+    return 0;
+}
+
 void handle_announce_message(INFO_NO *no, int fd, const char *line)
 {
     char net[4] = "";
@@ -307,28 +424,105 @@ void handle_announce_message(INFO_NO *no, int fd, const char *line)
     int new_dist = dist + 1;
     ROUTE_ENTRY *r = &no->routing[route_idx];
     int should_update = 0;
+    int should_flood = 0;
 
     if (!r->valid)
+    {
         should_update = 1;
+        should_flood = 1;
+    }
     else if (r->state == ROUTE_STATE_FORWARD && new_dist < r->dist)
+    {
         should_update = 1;
-    else if (r->state == ROUTE_STATE_FORWARD && new_dist == r->dist &&
+        should_flood = 1;
+    }
+    else if (r->state == ROUTE_STATE_FORWARD &&
+             new_dist == r->dist &&
              strcmp(no->neighbors[nidx].id, r->next_hop) < 0)
+    {
         should_update = 1;
+        should_flood = 1;
+    }
+    else if (r->state == ROUTE_STATE_FORWARD &&
+             new_dist == r->dist &&
+             strcmp(no->neighbors[nidx].id, r->next_hop) == 0)
+    {
+        /* anúncio repetido pela rota já escolhida:
+           não muda a tabela, mas deve continuar a propagar */
+        should_flood = 1;
+    }
 
-    if (!should_update)
+    if (should_update)
+    {
+        r->valid = 1;
+        strncpy(r->dest, src_id, sizeof(r->dest) - 1);
+        r->dest[sizeof(r->dest) - 1] = '\0';
+        r->state = ROUTE_STATE_FORWARD;
+        r->dist = new_dist;
+        strncpy(r->next_hop, no->neighbors[nidx].id, sizeof(r->next_hop) - 1);
+        r->next_hop[sizeof(r->next_hop) - 1] = '\0';
+
+        printf("[ROUTING] dest=%s via=%s dist=%d\n", r->dest, r->next_hop, r->dist);
+    }
+
+    if (should_flood)
+        flood_announce_except(no, src_id, new_dist, fd);
+}
+
+
+void handle_msg_message(INFO_NO *no, int fd, const char *line)
+{
+    char src[3] = "";
+    char dest[3] = "";
+    char text[900] = "";
+
+    if (sscanf(line, "MSG %2s %2s %899[^\n]", src, dest, text) != 3)
+    {
+        printf("[AVISO] MSG mal formatada: %s\n", line);
+        return;
+    }
+
+    if (!no->joined)
         return;
 
-    r->valid = 1;
-    strncpy(r->dest, src_id, sizeof(r->dest) - 1);
-    r->dest[sizeof(r->dest) - 1] = '\0';
-    r->state = ROUTE_STATE_FORWARD;
-    r->dist = new_dist;
-    strncpy(r->next_hop, no->neighbors[nidx].id, sizeof(r->next_hop) - 1);
-    r->next_hop[sizeof(r->next_hop) - 1] = '\0';
+    monitor_log(no, "RX", fd, "%s", line);
 
-    printf("[ROUTING] dest=%s via=%s dist=%d\n", r->dest, r->next_hop, r->dist);
-    flood_announce_except(no, src_id, new_dist, fd);
+    if (testa_formato_id(src) || testa_formato_id(dest))
+    {
+        printf("[AVISO] MSG inválida: %s\n", line);
+        return;
+    }
+
+    if (strcmp(dest, no->node_id) == 0)
+    {
+        printf("[MSG] de %s para %s: %s\n", src, dest, text);
+        return;
+    }
+
+    int ridx = id_to_index(dest);
+    if (ridx < 0 || ridx >= n_max_nos || !no->routing[ridx].valid ||
+        no->routing[ridx].state != ROUTE_STATE_FORWARD)
+    {
+        printf("[AVISO] sem rota para encaminhar mensagem para dest=%s.\n", dest);
+        return;
+    }
+
+    int nidx = neighbor_find_by_id(no, no->routing[ridx].next_hop);
+    if (nidx == -1 || no->neighbors[nidx].fd == -1)
+    {
+        printf("[AVISO] next-hop %s indisponível para dest=%s.\n",
+               no->routing[ridx].next_hop, dest);
+        return;
+    }
+
+    if (no->neighbors[nidx].fd == fd)
+    {
+        printf("[AVISO] rota para %s aponta de volta para o remetente; mensagem descartada.\n", dest);
+        return;
+    }
+
+    if (send_msg_to_fd(no, no->neighbors[nidx].fd, src, dest, text) < 0)
+        perror("[AVISO] write MSG forward");
 }
 
 // -------------------------
@@ -429,6 +623,7 @@ void inicializar_no(INFO_NO *no)
     no->node_id[0] = '\0';
     no->joined = 0;
     no->registered = 0;
+    no->monitor_on = 0;
     for (int i = 0; i < n_max_internos; i++)
         neighbor_clear_slot(no, i);
     routing_reset(no);
@@ -589,68 +784,24 @@ int join(INFO_NO *no, const char *net, const char *id, const char *regIP, const 
         return -1;
     }
 
-    // 1) NODES -> confirmar unicidade do id
-    {
-        int tid = next_tid();
-        char req[64];
-        snprintf(req, sizeof(req), "NODES %03d 0 %s", tid, net);
-
-        char resp[2048];
-        if (udp_request_response(regIP, regUDP, req, resp, sizeof(resp), 5) < 0)
-            return -1;
-
-        char *saveptr = NULL;
-        char *line = strtok_r(resp, "\n", &saveptr);
-        if (!line)
-        {
-            printf("[ERRO] Resposta NODES mal formatada (vazia).\n");
-            return -1;
-        }
-
-        int r_tid = -1, op = -1;
-        char r_net[4] = "";
-        if (sscanf(line, "NODES %d %d %3s", &r_tid, &op, r_net) != 3)
-        {
-            printf("[ERRO] Resposta NODES mal formatada: %s\n", line);
-            return -1;
-        }
-
-        if (op != 1)
-        {
-            printf("[ERRO] Servidor respondeu NODES com op=%d (erro).\n", op);
-            return -1;
-        }
-
-        if (strcmp(r_net, net) != 0)
-        {
-            printf("[ERRO] Servidor respondeu para net=%s mas pedimos net=%s.\n", r_net, net);
-            return -1;
-        }
-
-        for (line = strtok_r(NULL, "\n", &saveptr); line != NULL; line = strtok_r(NULL, "\n", &saveptr))
-        {
-            if (strlen(line) == 2 && strcmp(line, id) == 0)
-            {
-                printf("[ERRO] O id %s já existe na rede %s. Escolhe outro.\n", id, net);
-                return -1;
-            }
-        }
-    }
-
-    // 2) REG tid 0 net id IP TCP\n
+    /* Fonte de verdade = resposta do servidor ao REG.
+       NÃO decidir localmente com NODES, para evitar race condition. */
     {
         int tid = next_tid();
         char req[128];
-        snprintf(req, sizeof(req), "REG %03d 0 %s %s %s %s\n", tid, net, id, no->id.ip, no->id.tcp);
+        snprintf(req, sizeof(req), "REG %03d 0 %s %s %s %s\n",
+                 tid, net, id, no->id.ip, no->id.tcp);
 
         char resp[256];
         if (udp_request_response(regIP, regUDP, req, resp, sizeof(resp), 5) < 0)
             return -1;
 
         int r_tid = -1, op = -1;
+        char r_net[4] = "";
+        char r_id[3] = "";
 
-        /* 1) parse mínimo obrigatório */
-        if (sscanf(resp, "REG %d %d", &r_tid, &op) != 2)
+        /* parse mínimo obrigatório */
+        if (sscanf(resp, "REG %d %d %3s %2s", &r_tid, &op, r_net, r_id) < 2)
         {
             printf("[ERRO] Resposta REG mal formatada: %s\n", resp);
             return -1;
@@ -662,37 +813,34 @@ int join(INFO_NO *no, const char *net, const char *id, const char *regIP, const 
             return -1;
         }
 
-        /* 2) tratar op */
-        if (op == 2)
+        /* sucesso */
+        if (op == 1)
         {
-            printf("[ERRO] Servidor com base de dados cheia. Não foi possível registar o nó.\n");
-            return -1;
+            if (sscanf(resp, "REG %d %d %3s %2s", &r_tid, &op, r_net, r_id) != 4)
+            {
+                printf("[ERRO] Resposta REG mal formatada para op=1: %s\n", resp);
+                return -1;
+            }
+
+            if (strcmp(r_net, net) != 0 || strcmp(r_id, id) != 0)
+            {
+                printf("[ERRO] Resposta REG inconsistente (net/id).\n");
+                return -1;
+            }
         }
-
-        if (op != 1)
+        else
         {
-            printf("[ERRO] Servidor respondeu REG com op=%d (erro).\n", op);
-            return -1;
-        }
-
-        /* 3) como op=1, agora sim exigir net e id */
-        char r_net[4] = "";
-        char r_id[3] = "";
-
-        if (sscanf(resp, "REG %d %d %3s %2s", &r_tid, &op, r_net, r_id) != 4)
-        {
-            printf("[ERRO] Resposta REG mal formatada para op=1: %s\n", resp);
-            return -1;
-        }
-
-        if (strcmp(r_net, net) != 0 || strcmp(r_id, id) != 0)
-        {
-            printf("[ERRO] Resposta REG inconsistente (net/id).\n");
+            /* qualquer op != 1 significa que o servidor recusou o registo.
+               Isto evita assumir localmente se foi "id duplicado", "bd cheia"
+               ou outro motivo específico, caso o protocolo do professor use
+               códigos diferentes. */
+            printf("[ERRO] Servidor recusou o join para net=%s id=%s (REG op=%d).\n",
+                   net, id, op);
             return -1;
         }
     }
 
-    // sucesso: atualizar estado do nó
+    /* só após REG aceite atualizar o estado local */
     strncpy(no->net.net_id, net, sizeof(no->net.net_id) - 1);
     no->net.net_id[sizeof(no->net.net_id) - 1] = '\0';
 
@@ -710,7 +858,8 @@ int join(INFO_NO *no, const char *net, const char *id, const char *regIP, const 
     routing_reset(no);
     routing_init_self(no);
 
-    printf("[OK] join: net=%s id=%s (registado em %s:%s)\n", no->net.net_id, no->node_id, no->net.regIP, no->net.regUDP);
+    printf("[OK] join: net=%s id=%s (registado em %s:%s)\n",
+           no->net.net_id, no->node_id, no->net.regIP, no->net.regUDP);
     return 0;
 }
 
@@ -1001,6 +1150,7 @@ int remove_edge(INFO_NO *no, const char *id, fd_set *master_set, int *max_fd)
     close(fd);
     if (master_set)
         FD_CLR(fd, master_set);
+    clear_tcp_fd_state(fd);
     if (removed_id[0] != '\0')
         routing_invalidate_next_hop(no, removed_id);
     neighbor_clear_slot(no, idx);
