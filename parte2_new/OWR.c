@@ -69,6 +69,8 @@ static int prefer_outgoing(const char *my_id, const char *other_id)
 static void handle_neighbor_message(INFO_NO *no, int fd, const char *line)
 {
     char id[3] = "";
+    int newly_identified = 0;
+
     if (sscanf(line, "NEIGHBOR %2s", id) != 1)
     {
         printf("[AVISO] NEIGHBOR mal formatado: %s\n", line);
@@ -88,19 +90,17 @@ static void handle_neighbor_message(INFO_NO *no, int fd, const char *line)
     {
         strncpy(no->neighbors[idx].id, id, sizeof(no->neighbors[idx].id) - 1);
         no->neighbors[idx].id[sizeof(no->neighbors[idx].id) - 1] = '\0';
+        newly_identified = 1;
         printf("[OK] vizinho identificado: fd=%d id=%s\n", fd, id);
     }
-
-    /* novo caso: já havia um id guardado, mas o peer anunciou outro */
     else if (strcmp(no->neighbors[idx].id, id) != 0)
     {
         printf("[ERRO] Mismatch de vizinho no fd=%d: esperado=%s, recebido=%s. A fechar ligação.\n",
                fd, no->neighbors[idx].id, id);
-
         drop_fd(no, fd);
         return;
     }
-    // deduplicar (max 1 aresta por par)
+
     int other_idx = neighbor_find_by_id(no, id);
     if (other_idx != -1 && other_idx != idx)
     {
@@ -121,6 +121,9 @@ static void handle_neighbor_message(INFO_NO *no, int fd, const char *line)
 
         drop_fd(no, drop_fd_val);
     }
+
+    if (newly_identified && neighbor_find_by_fd(no, fd) != -1)
+        routing_on_new_neighbor(no, id);
 }
 
 static void handle_tcp_lines(INFO_NO *no, int fd)
@@ -177,6 +180,7 @@ static void handle_tcp_lines(INFO_NO *no, int fd)
                 handle_msg_message(no, fd, line);
             else
                 printf("[TCP] fd=%d line: %s\n", fd, line);
+
             start = i + 1;
         }
     }
@@ -361,7 +365,7 @@ static int processa_comandos(const char *buffer, INFO_NO *no)
         return 0;
     }
 
-    if (strcmp(words[0], "route") == 0 || strcmp(words[0], "a") == 0)
+    if (strcmp(words[0], "announce") == 0 || strcmp(words[0], "a") == 0)
     {
         (void)route_cmd(no);
         return 0;
@@ -521,7 +525,7 @@ int main(int argc, char **argv)
     printf("  add edge (ae) id\n");
     printf("  remove edge (re) id\n");
     printf("  direct add edge (dae) id idIP idTCP\n");
-    printf("  route (a)\n");
+    printf("  annouce (a)\n");
     printf("  show routing (sr) dest\n");
     printf("  start monitor (sm)\n");
     printf("  end monitor (em)\n");

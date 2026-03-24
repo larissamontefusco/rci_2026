@@ -94,12 +94,12 @@ bool testa_invocacao_programa(int argc, char **argv);
 void inicializar_no(INFO_NO *no);
 int parse_buffer(const char *buffer, int tamanho_buffer, char words[][100], int max_words);
 
-// Comandos
+// Comandos (fase inicial)
 int join(INFO_NO *no, const char *net, const char *id, const char *regIP, const char *regUDP);
 int direct_join(INFO_NO *no, const char *net, const char *id);
 int leave(INFO_NO *no, fd_set *master_set, int listen_fd, int *max_fd);
 
-// Arestas
+// Arestas (overlay)
 int add_edge(INFO_NO *no, const char *id, fd_set *master_set, int *max_fd);
 int remove_edge(INFO_NO *no, const char *id, fd_set *master_set, int *max_fd);
 int direct_add_edge(INFO_NO *no, const char *id, const char *idIP, const char *idTCP,
@@ -118,17 +118,14 @@ void show_routing_cmd(const INFO_NO *no, const char *dest);
 void start_monitor_cmd(INFO_NO *no);
 void end_monitor_cmd(INFO_NO *no);
 int message_cmd(INFO_NO *no, const char *dest, const char *message);
-
 void handle_route_message(INFO_NO *no, int fd, const char *line);
 void handle_coord_message(INFO_NO *no, int fd, const char *line);
 void handle_uncoord_message(INFO_NO *no, int fd, const char *line);
 void handle_msg_message(INFO_NO *no, int fd, const char *line);
-
 // Helpers vizinhos
 int neighbor_find_by_id(const INFO_NO *no, const char *id);
 int neighbor_find_by_fd(const INFO_NO *no, int fd);
 int neighbor_alloc_slot(INFO_NO *no);
 void neighbor_clear_slot(INFO_NO *no, int idx);
 void clear_tcp_fd_state(int fd);
-
 #endif

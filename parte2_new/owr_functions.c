@@ -189,10 +189,10 @@ static int send_coord_to_fd(const INFO_NO *no, int fd, const char *dest)
     return 0;
 }
 
-static int send_coord_to_fd(const INFO_NO *no, int fd, const char *dest)
+static int send_uncoord_to_fd(const INFO_NO *no, int fd, const char *dest)
 {
     char msg[32];
-    int n = snprintf(msg, sizeof(msg), "COORD %s\n", dest);
+    int n = snprintf(msg, sizeof(msg), "UNCOORD %s\n", dest);
     if (n < 0 || (size_t)n >= sizeof(msg))
         return -1;
     if (send_all(fd, msg, (size_t)n) < 0)
@@ -347,7 +347,6 @@ void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
     if (!neighbor_id || neighbor_id[0] == '\0')
         return;
 
-    /* se ainda existir outro fd ativo com o mesmo id, não houve perda real do vizinho */
     int still_present = (neighbor_find_by_id(no, neighbor_id) != -1);
 
     for (int i = 0; i < n_max_nos; i++)
@@ -356,7 +355,6 @@ void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
         if (!r->valid)
             continue;
 
-        /* Se já estou em coordenação, o regresso deixa de depender do vizinho perdido. */
         if (r->state == ROUTE_STATE_COORD)
         {
             for (int k = 0; k < n_max_internos; k++)
@@ -372,7 +370,6 @@ void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
         if (still_present)
             continue;
 
-        /* Se perdi o meu succ[t], entro em coordenação. */
         if (r->state == ROUTE_STATE_FORWARD &&
             r->next_hop[0] != '\0' &&
             strcmp(r->next_hop, neighbor_id) == 0)
@@ -383,7 +380,7 @@ void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
             r->state = ROUTE_STATE_COORD;
             r->dist = ROUTE_INF;
             r->next_hop[0] = '\0';
-            r->succ_coord[0] = '\0'; /* falha do próprio succ => -1 */
+            r->succ_coord[0] = '\0';
 
             for (int k = 0; k < n_max_internos; k++)
             {
@@ -619,14 +616,12 @@ void handle_coord_message(INFO_NO *no, int fd, const char *line)
     if (!r)
         return;
 
-    /* 1. Se state[t] = coord, responde logo com UNCOORD */
     if (r->state == ROUTE_STATE_COORD)
     {
         send_uncoord_to_fd(no, fd, dest);
         return;
     }
 
-    /* 2. Se state[t] = forward e j != succ[t], envia ROUTE(t,dist) e UNCOORD(t) */
     if (r->next_hop[0] == '\0' || strcmp(no->neighbors[nidx].id, r->next_hop) != 0)
     {
         if (r->dist < ROUTE_INF)
@@ -636,7 +631,6 @@ void handle_coord_message(INFO_NO *no, int fd, const char *line)
         return;
     }
 
-    /* 3. Se state[t] = forward e j == succ[t], entra em coordenação */
     r->state = ROUTE_STATE_COORD;
     strncpy(r->succ_coord, r->next_hop, sizeof(r->succ_coord) - 1);
     r->succ_coord[sizeof(r->succ_coord) - 1] = '\0';
@@ -1256,6 +1250,7 @@ int direct_add_edge(INFO_NO *no, const char *id, const char *idIP, const char *i
         *max_fd = fd;
 
     (void)send_neighbor_hello(fd, no->node_id);
+    routing_on_new_neighbor(no, id);
 
     printf("[OK] dae: ligado a id=%s (%s:%s) fd=%d\n", id, idIP, idTCP, fd);
     return 0;
