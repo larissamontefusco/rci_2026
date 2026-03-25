@@ -214,7 +214,7 @@ static void flood_route_except(const INFO_NO *no, const char *dest, int dist, in
     }
 }
 
-static int send_msg_to_fd(const INFO_NO *no, int fd, const char *src, const char *dest, const char *text)
+static int send_chat_to_fd(int fd, const char *src, const char *dest, const char *text)
 {
     char msg[160];
     size_t text_len;
@@ -539,7 +539,7 @@ int message_cmd(INFO_NO *no, const char *dest, const char *message)
         return -1;
     }
 
-    if (send_msg_to_fd(no, no->neighbors[nidx].fd, no->node_id, dest, message) < 0)
+    if (send_chat_to_fd(no->neighbors[nidx].fd, no->node_id, dest, message) < 0)
     {
         perror("[ERRO] write CHAT");
         return -1;
@@ -785,7 +785,7 @@ void handle_chat_message(INFO_NO *no, int fd, const char *line)
         return;
     }
 
-    if (send_msg_to_fd(no, no->neighbors[nidx].fd, src, dest, text) < 0)
+    if (send_chat_to_fd(no->neighbors[nidx].fd, src, dest, text) < 0)
         perror("[AVISO] write CHAT");
 }
 
