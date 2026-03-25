@@ -38,6 +38,7 @@ void clear_tcp_fd_state(int fd)
         rxbuf[fd][0] = '\0';
     }
 }
+
 static void drop_fd(INFO_NO *no, int fd)
 {
     int idx = neighbor_find_by_fd(no, fd);
@@ -47,15 +48,30 @@ static void drop_fd(INFO_NO *no, int fd)
     {
         strncpy(removed_id, no->neighbors[idx].id, sizeof(removed_id) - 1);
         removed_id[sizeof(removed_id) - 1] = '\0';
+
+        /* Remover primeiro da tabela local */
         neighbor_clear_slot(no, idx);
     }
 
+    /* Remover do conjunto monitorizado */
     if (master_set)
         FD_CLR(fd, master_set);
 
+    /* Fechar e limpar estado local do fd */
     close(fd);
     clear_tcp_fd_state(fd);
 
+    /* Recalcular max_fd se este era o maior descritor ativo */
+    if (master_set && fd == max_fd)
+    {
+        while (max_fd >= 0 && !FD_ISSET(max_fd, master_set))
+            max_fd--;
+
+        if (max_fd < 0)
+            max_fd = 0;
+    }
+
+    /* Só depois invalidar rotas dependentes deste vizinho */
     if (removed_id[0] != '\0')
         routing_invalidate_next_hop(no, removed_id);
 }
@@ -177,9 +193,7 @@ static void handle_tcp_lines(INFO_NO *no, int fd)
             else if (strncmp(line, "UNCOORD ", 8) == 0)
                 handle_uncoord_message(no, fd, line);
             else if (strncmp(line, "CHAT ", 5) == 0)
-                handle_msg_message(no, fd, line);
-            else if (strncmp(line, "MSG ", 4) == 0)
-                handle_msg_message(no, fd, line); /* compatibilidade temporária */
+                handle_chat_message(no, fd, line);
             else
                 printf("[TCP] fd=%d line: %s\n", fd, line);
 

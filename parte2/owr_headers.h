@@ -122,7 +122,7 @@ int message_cmd(INFO_NO *no, const char *dest, const char *message);
 void handle_route_message(INFO_NO *no, int fd, const char *line);
 void handle_coord_message(INFO_NO *no, int fd, const char *line);
 void handle_uncoord_message(INFO_NO *no, int fd, const char *line);
-void handle_msg_message(INFO_NO *no, int fd, const char *line);
+void handle_chat_message(INFO_NO *no, int fd, const char *line);
 // Helpers vizinhos
 int neighbor_find_by_id(const INFO_NO *no, const char *id);
 int neighbor_find_by_fd(const INFO_NO *no, int fd);

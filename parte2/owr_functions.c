@@ -232,7 +232,8 @@ static int send_msg_to_fd(const INFO_NO *no, int fd, const char *src, const char
         return -1;
     if (send_all(fd, msg, (size_t)n) < 0)
         return -1;
-    monitor_log(no, "TX", fd, "%s", msg);
+
+    /* CHAT não deve aparecer no monitor de encaminhamento */
     return 0;
 }
 
@@ -593,7 +594,9 @@ void handle_route_message(INFO_NO *no, int fd, const char *line)
         if (r->state == ROUTE_STATE_FORWARD)
         {
             printf("[ROUTING] dest=%s via=%s dist=%d\n", r->dest, r->next_hop, r->dist);
-            flood_route_except(no, dest, r->dist, fd);
+            //flood_route_except(no, dest, r->dist, fd);
+            /* Enunciado: reenviar a todos os vizinhos */
+            flood_route_except(no, dest, r->dist, -1);
         }
         else
         {
@@ -640,10 +643,13 @@ void handle_coord_message(INFO_NO *no, int fd, const char *line)
 
     if (r->next_hop[0] == '\0' || strcmp(no->neighbors[nidx].id, r->next_hop) != 0)
     {
-        if (r->dist < ROUTE_INF)
-            send_route_to_fd(no, fd, dest, r->dist);
+        /* Enunciado: enviar ROUTE e UNCOORD */
+        if (send_route_to_fd(no, fd, dest, r->dist) < 0)
+            perror("[AVISO] write ROUTE");
 
-        send_uncoord_to_fd(no, fd, dest);
+        if (send_uncoord_to_fd(no, fd, dest) < 0)
+            perror("[AVISO] write UNCOORD");
+
         return;
     }
 
@@ -710,7 +716,7 @@ void handle_uncoord_message(INFO_NO *no, int fd, const char *line)
         route_leave_coord(no, r);
 }
 
-void handle_msg_message(INFO_NO *no, int fd, const char *line)
+void handle_chat_message(INFO_NO *no, int fd, const char *line)
 {
     char src[3] = "";
     char dest[3] = "";
@@ -718,44 +724,26 @@ void handle_msg_message(INFO_NO *no, int fd, const char *line)
     char extra = '\0';
     int matched;
 
-    if (strncmp(line, "CHAT ", 5) == 0)
-    {
-        matched = sscanf(line, "CHAT %2s %2s %128[^\n]%c", src, dest, text, &extra);
-        if (matched == 4)
-        {
-            printf("[AVISO] CHAT excede o máximo de %d caracteres: %s\n", CHAT_MAX_LEN, line);
-            return;
-        }
-        if (matched != 3)
-        {
-            printf("[AVISO] CHAT mal formatada: %s\n", line);
-            return;
-        }
-    }
-    else if (strncmp(line, "MSG ", 4) == 0)
-    {
-        matched = sscanf(line, "MSG %2s %2s %128[^\n]%c", src, dest, text, &extra);
-        if (matched == 4)
-        {
-            printf("[AVISO] MSG excede o máximo de %d caracteres: %s\n", CHAT_MAX_LEN, line);
-            return;
-        }
-        if (matched != 3)
-        {
-            printf("[AVISO] MSG mal formatada: %s\n", line);
-            return;
-        }
-    }
-    else
+    if (strncmp(line, "CHAT ", 5) != 0)
     {
         printf("[AVISO] mensagem de chat desconhecida: %s\n", line);
         return;
     }
 
+    matched = sscanf(line, "CHAT %2s %2s %128[^\n]%c", src, dest, text, &extra);
+    if (matched == 4)
+    {
+        printf("[AVISO] CHAT excede o máximo de %d caracteres: %s\n", CHAT_MAX_LEN, line);
+        return;
+    }
+    if (matched != 3)
+    {
+        printf("[AVISO] CHAT mal formatada: %s\n", line);
+        return;
+    }
+
     if (!no->joined)
         return;
-
-    monitor_log(no, "RX", fd, "%s", line);
 
     if (testa_formato_id(src) || testa_formato_id(dest))
     {
@@ -798,7 +786,7 @@ void handle_msg_message(INFO_NO *no, int fd, const char *line)
     }
 
     if (send_msg_to_fd(no, no->neighbors[nidx].fd, src, dest, text) < 0)
-        perror("[AVISO] write CHAT forward");
+        perror("[AVISO] write CHAT");
 }
 
 // -------------------------
@@ -1399,13 +1387,12 @@ int add_edge(INFO_NO *no, const char *id, fd_set *master_set, int *max_fd)
 
 int remove_edge(INFO_NO *no, const char *id, fd_set *master_set, int *max_fd)
 {
-    (void)max_fd;
-
     if (!no->joined)
     {
         printf("[ERRO] Não estás em nenhuma rede.\n");
         return -1;
     }
+
     if (testa_formato_id((char *)id))
     {
         printf("[ERRO] Uso: re id\n");
@@ -1421,16 +1408,36 @@ int remove_edge(INFO_NO *no, const char *id, fd_set *master_set, int *max_fd)
 
     int fd = no->neighbors[idx].fd;
     char removed_id[3] = "";
+
     strncpy(removed_id, no->neighbors[idx].id, sizeof(removed_id) - 1);
     removed_id[sizeof(removed_id) - 1] = '\0';
 
+    /* 1) Fechar a ligação TCP */
     close(fd);
+
+    /* 2) Remover do conjunto monitorizado */
     if (master_set)
         FD_CLR(fd, master_set);
+
+    /* 3) Limpar estado associado ao fd */
     clear_tcp_fd_state(fd);
+
+    /* 4) Remover o vizinho da tabela local ANTES da invalidação */
+    neighbor_clear_slot(no, idx);
+
+    /* 5) Agora a invalidação já vê que o vizinho desapareceu */
     if (removed_id[0] != '\0')
         routing_invalidate_next_hop(no, removed_id);
-    neighbor_clear_slot(no, idx);
+
+    /* 6) Se este fd era o maior, recalcular max_fd */
+    if (master_set && max_fd && fd == *max_fd)
+    {
+        while (*max_fd >= 0 && !FD_ISSET(*max_fd, master_set))
+            (*max_fd)--;
+
+        if (*max_fd < 0)
+            *max_fd = 0;
+    }
 
     printf("[OK] re: aresta removida com id=%s (fd=%d)\n", id, fd);
     return 0;
