@@ -189,10 +189,10 @@ static int send_coord_to_fd(const INFO_NO *no, int fd, const char *dest)
     return 0;
 }
 
-static int send_coord_to_fd(const INFO_NO *no, int fd, const char *dest)
+static int send_uncoord_to_fd(const INFO_NO *no, int fd, const char *dest)
 {
     char msg[32];
-    int n = snprintf(msg, sizeof(msg), "COORD %s\n", dest);
+    int n = snprintf(msg, sizeof(msg), "UNCOORD %s\n", dest);
     if (n < 0 || (size_t)n >= sizeof(msg))
         return -1;
     if (send_all(fd, msg, (size_t)n) < 0)
@@ -216,8 +216,18 @@ static void flood_route_except(const INFO_NO *no, const char *dest, int dist, in
 
 static int send_msg_to_fd(const INFO_NO *no, int fd, const char *src, const char *dest, const char *text)
 {
-    char msg[1024];
-    int n = snprintf(msg, sizeof(msg), "MSG %s %s %s\n", src, dest, text);
+    char msg[160];
+    size_t text_len;
+    int n;
+
+    if (!text)
+        return -1;
+
+    text_len = strlen(text);
+    if (text_len == 0 || text_len > CHAT_MAX_LEN)
+        return -1;
+
+    n = snprintf(msg, sizeof(msg), "CHAT %s %s %s\n", src, dest, text);
     if (n < 0 || (size_t)n >= sizeof(msg))
         return -1;
     if (send_all(fd, msg, (size_t)n) < 0)
@@ -347,7 +357,6 @@ void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
     if (!neighbor_id || neighbor_id[0] == '\0')
         return;
 
-    /* se ainda existir outro fd ativo com o mesmo id, não houve perda real do vizinho */
     int still_present = (neighbor_find_by_id(no, neighbor_id) != -1);
 
     for (int i = 0; i < n_max_nos; i++)
@@ -356,7 +365,6 @@ void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
         if (!r->valid)
             continue;
 
-        /* Se já estou em coordenação, o regresso deixa de depender do vizinho perdido. */
         if (r->state == ROUTE_STATE_COORD)
         {
             for (int k = 0; k < n_max_internos; k++)
@@ -372,7 +380,6 @@ void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
         if (still_present)
             continue;
 
-        /* Se perdi o meu succ[t], entro em coordenação. */
         if (r->state == ROUTE_STATE_FORWARD &&
             r->next_hop[0] != '\0' &&
             strcmp(r->next_hop, neighbor_id) == 0)
@@ -383,7 +390,7 @@ void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
             r->state = ROUTE_STATE_COORD;
             r->dist = ROUTE_INF;
             r->next_hop[0] = '\0';
-            r->succ_coord[0] = '\0'; /* falha do próprio succ => -1 */
+            r->succ_coord[0] = '\0';
 
             for (int k = 0; k < n_max_internos; k++)
             {
@@ -505,7 +512,7 @@ int message_cmd(INFO_NO *no, const char *dest, const char *message)
 
     if (strcmp(dest, no->node_id) == 0)
     {
-        printf("[MSG] de %s para %s: %s\n", no->node_id, no->node_id, message);
+        printf("[CHAT] de %s para %s: %s\n", no->node_id, no->node_id, message);
         return 0;
     }
 
@@ -513,7 +520,7 @@ int message_cmd(INFO_NO *no, const char *dest, const char *message)
     if (ridx < 0 || ridx >= n_max_nos || !no->routing[ridx].valid ||
         no->routing[ridx].state != ROUTE_STATE_FORWARD)
     {
-        printf("[ERRO] Sem rota para o destino %s. Usa 'route' e confirma com 'sr %s'.\n", dest, dest);
+        printf("[ERRO] Sem rota para o destino %s. Usa 'announce' e confirma com 'sr %s'.\n", dest, dest);
         return -1;
     }
 
@@ -525,9 +532,15 @@ int message_cmd(INFO_NO *no, const char *dest, const char *message)
         return -1;
     }
 
+    if (strlen(message) > CHAT_MAX_LEN)
+    {
+        printf("[ERRO] A mensagem excede o máximo de %d caracteres.\n", CHAT_MAX_LEN);
+        return -1;
+    }
+
     if (send_msg_to_fd(no, no->neighbors[nidx].fd, no->node_id, dest, message) < 0)
     {
-        perror("[ERRO] write MSG");
+        perror("[ERRO] write CHAT");
         return -1;
     }
 
@@ -619,14 +632,12 @@ void handle_coord_message(INFO_NO *no, int fd, const char *line)
     if (!r)
         return;
 
-    /* 1. Se state[t] = coord, responde logo com UNCOORD */
     if (r->state == ROUTE_STATE_COORD)
     {
         send_uncoord_to_fd(no, fd, dest);
         return;
     }
 
-    /* 2. Se state[t] = forward e j != succ[t], envia ROUTE(t,dist) e UNCOORD(t) */
     if (r->next_hop[0] == '\0' || strcmp(no->neighbors[nidx].id, r->next_hop) != 0)
     {
         if (r->dist < ROUTE_INF)
@@ -636,7 +647,6 @@ void handle_coord_message(INFO_NO *no, int fd, const char *line)
         return;
     }
 
-    /* 3. Se state[t] = forward e j == succ[t], entra em coordenação */
     r->state = ROUTE_STATE_COORD;
     strncpy(r->succ_coord, r->next_hop, sizeof(r->succ_coord) - 1);
     r->succ_coord[sizeof(r->succ_coord) - 1] = '\0';
@@ -704,11 +714,41 @@ void handle_msg_message(INFO_NO *no, int fd, const char *line)
 {
     char src[3] = "";
     char dest[3] = "";
-    char text[900] = "";
+    char text[CHAT_MAX_LEN + 1] = "";
+    char extra = '\0';
+    int matched;
 
-    if (sscanf(line, "MSG %2s %2s %899[^\n]", src, dest, text) != 3)
+    if (strncmp(line, "CHAT ", 5) == 0)
     {
-        printf("[AVISO] MSG mal formatada: %s\n", line);
+        matched = sscanf(line, "CHAT %2s %2s %128[^\n]%c", src, dest, text, &extra);
+        if (matched == 4)
+        {
+            printf("[AVISO] CHAT excede o máximo de %d caracteres: %s\n", CHAT_MAX_LEN, line);
+            return;
+        }
+        if (matched != 3)
+        {
+            printf("[AVISO] CHAT mal formatada: %s\n", line);
+            return;
+        }
+    }
+    else if (strncmp(line, "MSG ", 4) == 0)
+    {
+        matched = sscanf(line, "MSG %2s %2s %128[^\n]%c", src, dest, text, &extra);
+        if (matched == 4)
+        {
+            printf("[AVISO] MSG excede o máximo de %d caracteres: %s\n", CHAT_MAX_LEN, line);
+            return;
+        }
+        if (matched != 3)
+        {
+            printf("[AVISO] MSG mal formatada: %s\n", line);
+            return;
+        }
+    }
+    else
+    {
+        printf("[AVISO] mensagem de chat desconhecida: %s\n", line);
         return;
     }
 
@@ -719,13 +759,19 @@ void handle_msg_message(INFO_NO *no, int fd, const char *line)
 
     if (testa_formato_id(src) || testa_formato_id(dest))
     {
-        printf("[AVISO] MSG inválida: %s\n", line);
+        printf("[AVISO] CHAT inválida: %s\n", line);
+        return;
+    }
+
+    if (text[0] == '\0')
+    {
+        printf("[AVISO] CHAT vazia descartada.\n");
         return;
     }
 
     if (strcmp(dest, no->node_id) == 0)
     {
-        printf("[MSG] de %s para %s: %s\n", src, dest, text);
+        printf("[CHAT] de %s para %s: %s\n", src, dest, text);
         return;
     }
 
@@ -752,7 +798,7 @@ void handle_msg_message(INFO_NO *no, int fd, const char *line)
     }
 
     if (send_msg_to_fd(no, no->neighbors[nidx].fd, src, dest, text) < 0)
-        perror("[AVISO] write MSG forward");
+        perror("[AVISO] write CHAT forward");
 }
 
 // -------------------------
@@ -1256,6 +1302,7 @@ int direct_add_edge(INFO_NO *no, const char *id, const char *idIP, const char *i
         *max_fd = fd;
 
     (void)send_neighbor_hello(fd, no->node_id);
+    routing_on_new_neighbor(no, id);
 
     printf("[OK] dae: ligado a id=%s (%s:%s) fd=%d\n", id, idIP, idTCP, fd);
     return 0;
