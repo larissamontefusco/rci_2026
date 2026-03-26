@@ -594,7 +594,7 @@ void handle_route_message(INFO_NO *no, int fd, const char *line)
         if (r->state == ROUTE_STATE_FORWARD)
         {
             printf("[ROUTING] dest=%s via=%s dist=%d\n", r->dest, r->next_hop, r->dist);
-            //flood_route_except(no, dest, r->dist, fd);
+            // flood_route_except(no, dest, r->dist, fd);
             /* Enunciado: reenviar a todos os vizinhos */
             flood_route_except(no, dest, r->dist, -1);
         }
@@ -637,6 +637,19 @@ void handle_coord_message(INFO_NO *no, int fd, const char *line)
 
     if (r->state == ROUTE_STATE_COORD)
     {
+        /*
+         * Caso especial importante:
+         * se eu estava em coordenação mas tinha aprendido temporariamente
+         * uma rota via este mesmo vizinho, e agora esse vizinho entra também
+         * em coordenação para o mesmo destino, então essa rota temporária
+         * deixa de ser confiável e deve ser invalidada.
+         */
+        if (r->next_hop[0] != '\0' &&
+            strcmp(r->next_hop, no->neighbors[nidx].id) == 0)
+        {
+            r->dist = ROUTE_INF;
+            r->next_hop[0] = '\0';
+        }
         send_uncoord_to_fd(no, fd, dest);
         return;
     }
