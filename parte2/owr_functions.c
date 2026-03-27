@@ -342,6 +342,7 @@ void routing_init_self(INFO_NO *no)
         r->coord_wait[i] = 0;
 }
 
+// quando entra um novo vizinho, enviar-lhe as rotas já conhecidas
 void routing_on_new_neighbor(INFO_NO *no, const char *neighbor_id)
 {
     int nidx = neighbor_find_by_id(no, neighbor_id);
@@ -358,21 +359,24 @@ void routing_on_new_neighbor(INFO_NO *no, const char *neighbor_id)
 
         if (r->state == ROUTE_STATE_FORWARD)
         {
-            if (r->dist < ROUTE_INF)
+            if (r->dist < ROUTE_INF) // se a rota está normal e é válida, anunciar ao novo vizinho
                 send_route_to_fd(no, fd, r->dest, r->dist);
         }
         else if (r->state == ROUTE_STATE_COORD)
         {
+            // se a rota está normal e é válida, anunciar ao novo vizinho
             r->coord_wait[nidx] = 0;
         }
     }
 }
 
+// se estiver em coordenação, este vizinho novo não conta como pendente
 void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
 {
     if (!neighbor_id || neighbor_id[0] == '\0')
         return;
 
+    // invalida rotas cujo next hop era um vizinho que desapareceu
     int still_present = (neighbor_find_by_id(no, neighbor_id) != -1);
 
     for (int i = 0; i < n_max_nos; i++)
@@ -380,7 +384,7 @@ void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
         ROUTE_ENTRY *r = &no->routing[i];
         if (!r->valid)
             continue;
-
+        // se a rota já está em coordenação, limpar vizinhos que já não existem
         if (r->state == ROUTE_STATE_COORD)
         {
             for (int k = 0; k < n_max_internos; k++)
@@ -392,10 +396,10 @@ void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
             if (route_all_coord_done(no, r))
                 route_leave_coord(no, r);
         }
-
+        // se o vizinho ainda existe, não é preciso invalidar esta rota
         if (still_present)
             continue;
-
+        // se esta rota usava esse vizinho como next hop, entrar em coordenação
         if (r->state == ROUTE_STATE_FORWARD &&
             r->next_hop[0] != '\0' &&
             strcmp(r->next_hop, neighbor_id) == 0)
@@ -413,19 +417,19 @@ void routing_invalidate_next_hop(INFO_NO *no, const char *neighbor_id)
                 r->coord_wait[k] = 0;
 
                 if (no->neighbors[k].fd != -1)
-                {
+                { // pedir coordenação a todos os vizinhos ainda ativos
                     r->coord_wait[k] = 1;
                     if (send_coord_to_fd(no, no->neighbors[k].fd, r->dest) < 0)
                         perror("[AVISO] write COORD");
                 }
             }
-
+            // se não ficou ninguém pendente, sair logo da coordenação
             if (route_all_coord_done(no, r))
                 route_leave_coord(no, r);
         }
     }
 }
-
+ // se não ficou ninguém pendente, sair logo da coordenação
 int route_cmd(INFO_NO *no)
 {
     if (!no->joined)
@@ -434,15 +438,15 @@ int route_cmd(INFO_NO *no)
         return -1;
     }
 
-    routing_init_self(no);
-
+    routing_init_self(no); // garantir que existe rota para o próprio nó
+ 
     // Depois do autoanúncio, difunde-se ROUTE <meu_id> 0 a todos os vizinhos.
     flood_route_except(no, no->node_id, 0, -1);
 
     printf("[OK] announce: nó %s anunciado na rede %s.\n", no->node_id, no->net.net_id);
     return 0;
 }
-
+// mostra a entrada de routing para um destino
 void show_routing_cmd(const INFO_NO *no, const char *dest)
 {
     if (!no->joined)
@@ -474,7 +478,7 @@ void show_routing_cmd(const INFO_NO *no, const char *dest)
 
     if (r->state == ROUTE_STATE_FORWARD)
     {
-        if (r->dist >= ROUTE_INF || r->next_hop[0] == '\0')
+        if (r->dist >= ROUTE_INF || r->next_hop[0] == '\0') // caso especial: rota para si próprio
         {
             if (strcmp(dest, no->node_id) == 0)
                 printf("Routing para destino %s: estado=expedição, distância=0, vizinho=local.\n", dest);
@@ -492,17 +496,17 @@ void show_routing_cmd(const INFO_NO *no, const char *dest)
 }
 
 void start_monitor_cmd(INFO_NO *no)
-{
+{ // liga a monitorização
     no->monitor_on = 1;
     printf("[OK] monitorização ativada.\n");
 }
 
 void end_monitor_cmd(INFO_NO *no)
-{
+{ // desliga a monitorização
     no->monitor_on = 0;
     printf("[OK] monitorização desativada.\n");
 }
-
+// envia uma mensagem CHAT para um destino
 int message_cmd(INFO_NO *no, const char *dest, const char *message)
 {
     if (!no->joined)
@@ -519,7 +523,7 @@ int message_cmd(INFO_NO *no, const char *dest, const char *message)
 
     if (!message)
         message = "";
-
+    // ignorar espaços no início
     while (*message == ' ' || *message == '\t')
         message++;
 
@@ -530,11 +534,11 @@ int message_cmd(INFO_NO *no, const char *dest, const char *message)
     }
 
     if (strcmp(dest, no->node_id) == 0)
-    {
+    { // se o destino for o próprio nó, mostrar localmente
         printf("[CHAT] de %s para %s: %s\n", no->node_id, no->node_id, message);
         return 0;
     }
-
+    
     int ridx = id_to_index(dest);
     if (ridx < 0 || ridx >= n_max_nos || !no->routing[ridx].valid ||
         no->routing[ridx].state != ROUTE_STATE_FORWARD)
@@ -542,7 +546,7 @@ int message_cmd(INFO_NO *no, const char *dest, const char *message)
         printf("[ERRO] Sem rota para o destino %s. Usa 'announce' e confirma com 'sr %s'.\n", dest, dest);
         return -1;
     }
-
+    // descobrir o vizinho next hop
     int nidx = neighbor_find_by_id(no, no->routing[ridx].next_hop);
     if (nidx == -1 || no->neighbors[nidx].fd == -1)
     {
@@ -556,7 +560,7 @@ int message_cmd(INFO_NO *no, const char *dest, const char *message)
         printf("[ERRO] A mensagem excede o máximo de %d caracteres.\n", CHAT_MAX_LEN);
         return -1;
     }
-
+    // enviar CHAT para o vizinho escolhido
     if (send_chat_to_fd(no->neighbors[nidx].fd, no->node_id, dest, message) < 0)
     {
         perror("[ERRO] write CHAT");
@@ -567,7 +571,7 @@ int message_cmd(INFO_NO *no, const char *dest, const char *message)
            dest, no->routing[ridx].next_hop);
     return 0;
 }
-
+// trata uma mensagem ROUTE recebida por TCP
 void handle_route_message(INFO_NO *no, int fd, const char *line)
 {
     char dest[3] = "";
@@ -589,11 +593,11 @@ void handle_route_message(INFO_NO *no, int fd, const char *line)
         printf("[AVISO] ROUTE inválida: %s\n", line);
         return;
     }
-
+    // descobrir de que vizinho veio esta ROUTE
     int nidx = neighbor_find_by_fd(no, fd);
     if (nidx == -1 || no->neighbors[nidx].id[0] == '\0')
         return;
-
+    // ignorar anúncios do próprio nó
     if (strcmp(dest, no->node_id) == 0)
         return;
 
@@ -603,6 +607,7 @@ void handle_route_message(INFO_NO *no, int fd, const char *line)
 
     int new_dist = dist + 1;
 
+    // só atualizar se encontrou caminho melhor
     if (new_dist < r->dist)
     {
         r->dist = new_dist;
@@ -612,8 +617,7 @@ void handle_route_message(INFO_NO *no, int fd, const char *line)
         if (r->state == ROUTE_STATE_FORWARD)
         {
             printf("[ROUTING] dest=%s via=%s dist=%d\n", r->dest, r->next_hop, r->dist);
-            // flood_route_except(no, dest, r->dist, fd);
-            /* Enunciado: reenviar a todos os vizinhos */
+            // pelo enunciado, reenviar a todos os vizinhos
             flood_route_except(no, dest, r->dist, -1);
         }
         else
