@@ -236,7 +236,7 @@ Antes de qualquer anúncio do nó `10`, os nós `20`, `30` e `40` não devem apr
 
 ### Campos de registo
 
-* [ ] Conforme
+* [x] Conforme
 * [ ] Não conforme
 * [ ] Parcial
 * Observado: ________
@@ -293,7 +293,7 @@ Depois de `a` em `N10`, o próprio nó `10` deve apresentar estado coerente de d
 
 ### Campos de registo
 
-* [ ] Conforme
+* [x] Conforme
 * [ ] Não conforme
 * [ ] Parcial
 * Observado: ________
@@ -350,7 +350,7 @@ O nó `20` deve apresentar estado de expedição relativamente ao destino `10`, 
 
 ### Campos de registo
 
-* [ ] Conforme
+* [x] Conforme
 * [ ] Não conforme
 * [ ] Parcial
 * Observado: ________
@@ -414,7 +414,7 @@ sr 10
 
 ### Campos de registo
 
-* [ ] Conforme
+* [x] Conforme
 * [ ] Não conforme
 * [ ] Parcial
 * Observado: ________

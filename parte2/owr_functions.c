@@ -315,14 +315,22 @@ void routing_reset(INFO_NO *no)
 
 void routing_init_self(INFO_NO *no)
 {
+    /*
+     * Esta função só é usada quando o utilizador executa "announce".
+     *
+     * Estar numa rede e ter vizinhos NÃO significa que o nó já se anunciou
+     * como destino alcançável. Pelo enunciado, essa alcançabilidade nasce
+     * com o comando "announce" e é então difundida por mensagens ROUTE.
+     */
     ROUTE_ENTRY *r = route_get_or_create(no, no->node_id);
     if (!r)
         return;
 
     r->state = ROUTE_STATE_FORWARD;
     r->dist = 0;
-    r->next_hop[0] = '\0';
+    r->next_hop[0] = '\0';     /* destino local: não há next-hop */
     r->succ_coord[0] = '\0';
+
     for (int i = 0; i < n_max_internos; i++)
         r->coord_wait[i] = 0;
 }
@@ -420,7 +428,10 @@ int route_cmd(INFO_NO *no)
     }
 
     routing_init_self(no);
+
+    // Depois do autoanúncio, difunde-se ROUTE <meu_id> 0 a todos os vizinhos.
     flood_route_except(no, no->node_id, 0, -1);
+
     printf("[OK] announce: nó %s anunciado na rede %s.\n", no->node_id, no->net.net_id);
     return 0;
 }
@@ -1041,7 +1052,6 @@ int direct_join(INFO_NO *no, const char *net, const char *id)
     no->joined = 1;
     no->registered = 0;
     routing_reset(no);
-    routing_init_self(no);
 
     printf("[OK] direct join: net=%s id=%s (sem registo no servidor)\n", no->net.net_id, no->node_id);
     return 0;
@@ -1133,7 +1143,7 @@ int join(INFO_NO *no, const char *net, const char *id, const char *regIP, const 
     no->joined = 1;
     no->registered = 1;
     routing_reset(no);
-    routing_init_self(no);
+    //routing_init_self(no); Essa rota só deve nascer quando o utilizador fizer "announce"
 
     printf("[OK] join: net=%s id=%s (registado em %s:%s)\n",
            no->net.net_id, no->node_id, no->net.regIP, no->net.regUDP);
