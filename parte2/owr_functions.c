@@ -19,6 +19,8 @@
 // Helpers
 // -------------------------
 
+// envia um pedido UDP ao servidor e espera resposta com timeout
+
 static int udp_request_response(
     const char *server_ip,
     const char *server_port,
@@ -33,7 +35,7 @@ static int udp_request_response(
     if (response_sz == 0)
         return -1;
 
-    memset(&hints, 0, sizeof(hints));
+    memset(&hints, 0, sizeof(hints));  // preparar pesquisa do endereço UDP do servidor
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
 
@@ -43,7 +45,7 @@ static int udp_request_response(
         fprintf(stderr, "[ERRO] getaddrinfo(%s,%s): %s\n", server_ip, server_port, gai_strerror(err));
         return -1;
     }
-
+    // criar socket UDP
     fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd == -1)
     {
@@ -51,7 +53,7 @@ static int udp_request_response(
         freeaddrinfo(res);
         return -1;
     }
-
+    // enviar pedido ao servidor
     ssize_t n = sendto(fd, request, strlen(request), 0, res->ai_addr, res->ai_addrlen);
     if (n == -1)
     {
@@ -61,7 +63,7 @@ static int udp_request_response(
         return -1;
     }
 
-    // wait for reply with timeout
+    // esperar resposta com timeout
     fd_set rfds;
     FD_ZERO(&rfds);
     FD_SET(fd, &rfds);
@@ -85,7 +87,7 @@ static int udp_request_response(
         freeaddrinfo(res);
         return -1;
     }
-
+    // ler resposta recebida
     struct sockaddr_storage from;
     socklen_t fromlen = sizeof(from);
     n = recvfrom(fd, response, response_sz - 1, 0, (struct sockaddr *)&from, &fromlen);
@@ -104,6 +106,7 @@ static int udp_request_response(
     return (int)n;
 }
 
+// gera um tid pseudoaleatório entre 000 e 999
 static int next_tid(void)
 {
     static int seeded = 0;
@@ -115,13 +118,14 @@ static int next_tid(void)
     return rand() % 1000; // 000..999
 }
 
+// converte id do nó para índice inteiro
 static int id_to_index(const char *id)
 {
     if (testa_formato_id((char *)id))
         return -1;
     return atoi(id);
 }
-
+// garante escrita completa no socket
 static int send_all(int fd, const char *buf, size_t len)
 {
     size_t off = 0;
@@ -134,7 +138,7 @@ static int send_all(int fd, const char *buf, size_t len)
     }
     return 0;
 }
-
+// remove \n e \r do fim da string
 static void trim_trailing_newline(char *s)
 {
     size_t n = strlen(s);
@@ -145,6 +149,7 @@ static void trim_trailing_newline(char *s)
     }
 }
 
+// escreve no monitor mensagens TX/RX quando o modo monitor está ligado
 static void monitor_log(const INFO_NO *no, const char *dir, int fd, const char *fmt, ...)
 {
     if (!no || !no->monitor_on)
@@ -164,7 +169,7 @@ static void monitor_log(const INFO_NO *no, const char *dir, int fd, const char *
 
     printf("[MONITOR] %s fd=%d peer=%s %s\n", dir, fd, peer_id, payload);
 }
-
+// envia uma mensagem ROUTE para um fd específico
 static int send_route_to_fd(const INFO_NO *no, int fd, const char *dest, int dist)
 {
     char msg[64];
@@ -176,7 +181,7 @@ static int send_route_to_fd(const INFO_NO *no, int fd, const char *dest, int dis
     monitor_log(no, "TX", fd, "%s", msg);
     return 0;
 }
-
+// envia uma mensagem COORD para um fd específico
 static int send_coord_to_fd(const INFO_NO *no, int fd, const char *dest)
 {
     char msg[32];
@@ -188,7 +193,7 @@ static int send_coord_to_fd(const INFO_NO *no, int fd, const char *dest)
     monitor_log(no, "TX", fd, "%s", msg);
     return 0;
 }
-
+// envia uma mensagem UNCOORD para um fd específico
 static int send_uncoord_to_fd(const INFO_NO *no, int fd, const char *dest)
 {
     char msg[32];
@@ -201,6 +206,7 @@ static int send_uncoord_to_fd(const INFO_NO *no, int fd, const char *dest)
     return 0;
 }
 
+// envia ROUTE para todos os vizinhos, exceto um fd específico
 static void flood_route_except(const INFO_NO *no, const char *dest, int dist, int except_fd)
 {
     for (int i = 0; i < n_max_internos; i++)
@@ -214,6 +220,7 @@ static void flood_route_except(const INFO_NO *no, const char *dest, int dist, in
     }
 }
 
+// envia uma mensagem CHAT para um fd
 static int send_chat_to_fd(int fd, const char *src, const char *dest, const char *text)
 {
     char msg[160];
@@ -233,10 +240,11 @@ static int send_chat_to_fd(int fd, const char *src, const char *dest, const char
     if (send_all(fd, msg, (size_t)n) < 0)
         return -1;
 
-    /* CHAT não deve aparecer no monitor de encaminhamento */
+    // CHAT não entra no monitor de encaminhamento
     return 0;
 }
 
+// limpa completamente uma entrada da tabela de routing
 static void route_entry_clear(ROUTE_ENTRY *r)
 {
     r->valid = 0;
@@ -250,6 +258,7 @@ static void route_entry_clear(ROUTE_ENTRY *r)
         r->coord_wait[i] = 0;
 }
 
+// devolve a rota de um destino ou cria uma nova se ainda não existir
 static ROUTE_ENTRY *route_get_or_create(INFO_NO *no, const char *dest)
 {
     int idx = id_to_index(dest);
@@ -268,6 +277,7 @@ static ROUTE_ENTRY *route_get_or_create(INFO_NO *no, const char *dest)
     return r;
 }
 
+// verifica se já chegaram todos os UNCOORD/COORD esperados
 static int route_all_coord_done(const INFO_NO *no, const ROUTE_ENTRY *r)
 {
     for (int i = 0; i < n_max_internos; i++)
@@ -277,29 +287,29 @@ static int route_all_coord_done(const INFO_NO *no, const ROUTE_ENTRY *r)
     }
     return 1;
 }
-
+// sai do estado de coordenação para uma rota
 static void route_leave_coord(INFO_NO *no, ROUTE_ENTRY *r)
 {
     char dest[3] = "";
     char succ_coord_id[3] = "";
 
-    strncpy(dest, r->dest, sizeof(dest) - 1);
+    strncpy(dest, r->dest, sizeof(dest) - 1); // guardar cópias antes de limpar campos
     dest[sizeof(dest) - 1] = '\0';
 
     strncpy(succ_coord_id, r->succ_coord, sizeof(succ_coord_id) - 1);
     succ_coord_id[sizeof(succ_coord_id) - 1] = '\0';
+ 
+    r->state = ROUTE_STATE_FORWARD; // voltar ao estado normal de forwarding
 
-    r->state = ROUTE_STATE_FORWARD;
-
-    for (int i = 0; i < n_max_internos; i++)
+    for (int i = 0; i < n_max_internos; i++) // voltar ao estado normal de forwarding
         r->coord_wait[i] = 0;
 
     r->succ_coord[0] = '\0';
 
-    if (r->dist < ROUTE_INF)
+    if (r->dist < ROUTE_INF) // se ainda existe rota válida, voltar a anunciá-la
         flood_route_except(no, dest, r->dist, -1);
 
-    if (succ_coord_id[0] != '\0')
+    if (succ_coord_id[0] != '\0') // avisar o sucessor coordenado que a coordenação terminou
     {
         int sidx = neighbor_find_by_id(no, succ_coord_id);
         if (sidx != -1 && no->neighbors[sidx].fd != -1)
@@ -308,27 +318,24 @@ static void route_leave_coord(INFO_NO *no, ROUTE_ENTRY *r)
 }
 
 void routing_reset(INFO_NO *no)
-{
+{ // limpa toda a tabela de routing
     for (int i = 0; i < n_max_nos; i++)
         route_entry_clear(&no->routing[i]);
 }
 
 void routing_init_self(INFO_NO *no)
 {
-    /*
-     * Esta função só é usada quando o utilizador executa "announce".
-     *
-     * Estar numa rede e ter vizinhos NÃO significa que o nó já se anunciou
-     * como destino alcançável. Pelo enunciado, essa alcançabilidade nasce
-     * com o comando "announce" e é então difundida por mensagens ROUTE.
-     */
+    // Esta função só é usada quando o utilizador executa "announce".
+    // Estar numa rede e ter vizinhos não significa que o nó já se anunciou como destino alcançável. 
+    //Pelo enunciado, essa alcançabilidade nasce com o comando "announce" e 
+    //é então difundida por mensagens ROUTE
     ROUTE_ENTRY *r = route_get_or_create(no, no->node_id);
-    if (!r)
+    if (!r) 
         return;
 
     r->state = ROUTE_STATE_FORWARD;
     r->dist = 0;
-    r->next_hop[0] = '\0';     /* destino local: não há next-hop */
+    r->next_hop[0] = '\0';     // destino local: não há next-hop 
     r->succ_coord[0] = '\0';
 
     for (int i = 0; i < n_max_internos; i++)
