@@ -1,3 +1,13 @@
+/********************************************************************************** 
+
+        PROJECTO RCI - GRUPO 73:
+        Larissa da Silva Montefusco & Nicollas Nunes Cardoso Nogueira
+
+        Black Formatter - Extensão do VSCODE => Utilizado para formatar automaticamente.
+
+**********************************************************************************/
+
+
 #define _POSIX_C_SOURCE 200112L
 
 #include <arpa/inet.h>
@@ -15,21 +25,26 @@
 #define max(A, B) ((A) >= (B) ? (A) : (B))
 #define TAMANHO_BUFFER 256
 
-static fd_set *master_set = NULL;
-static int max_fd = 0;
+// Conjunto de descritores monitorizados pelo select. 
+static fd_set *master_set = NULL; //Aqui fica o stdin, socket TCP de escuta e ligações TCP ativas
+static int max_fd = 0; // Maior descritor
+
+// Endereço IP e porto do servidor de registo 
 static char regIP[tamanho_ip] = "193.136.138.142";
 static char regUDP[tamanho_porto] = "59000";
 
-// framing TCP por fd
-static char rxbuf[FD_SETSIZE][2048];
-static int rxlen[FD_SETSIZE];
+// Buffers de receção TCP por descritor.
+static char rxbuf[FD_SETSIZE][2048]; // buffer associado a um descritor específico
+static int rxlen[FD_SETSIZE]; // quantidade de bytes válidos atualmente acumulados
 
+// Função que printa o prompt e mostra o prompt no terminal.
 static void print_prompt(void)
 {
     printf("> ");
     fflush(stdout);
 }
 
+// Limpa o estado do buffer TCP associado a um fd.
 void clear_tcp_fd_state(int fd)
 {
     if (fd >= 0 && fd < FD_SETSIZE)
@@ -39,29 +54,30 @@ void clear_tcp_fd_state(int fd)
     }
 }
 
+// Fecha uma ligação TCP, remove do select, limpa buffers e invalida rotas, que dependiam desse vizinho.
 static void drop_fd(INFO_NO *no, int fd)
 {
     int idx = neighbor_find_by_fd(no, fd);
     char removed_id[3] = "";
 
     if (idx != -1)
-    {
+    {   // guardar o id antes de limpar a entrada
         strncpy(removed_id, no->neighbors[idx].id, sizeof(removed_id) - 1);
         removed_id[sizeof(removed_id) - 1] = '\0';
 
-        /* Remover primeiro da tabela local */
+        // Remover primeiro da tabela local 
         neighbor_clear_slot(no, idx);
     }
 
-    /* Remover do conjunto monitorizado */
+    // Remover do conjunto monitorizado 
     if (master_set)
         FD_CLR(fd, master_set);
 
-    /* Fechar e limpar estado local do fd */
+    // Fechar e limpar estado local do fd 
     close(fd);
     clear_tcp_fd_state(fd);
 
-    /* Recalcular max_fd se este era o maior descritor ativo */
+    // Recalcular max_fd se este era o maior descritor ativo 
     if (master_set && fd == max_fd)
     {
         while (max_fd >= 0 && !FD_ISSET(max_fd, master_set))
@@ -71,7 +87,7 @@ static void drop_fd(INFO_NO *no, int fd)
             max_fd = 0;
     }
 
-    /* Só depois invalidar rotas dependentes deste vizinho */
+    // Só depois invalidar rotas dependentes deste vizinho 
     if (removed_id[0] != '\0')
         routing_invalidate_next_hop(no, removed_id);
 }
@@ -82,6 +98,7 @@ static int prefer_outgoing(const char *my_id, const char *other_id)
     return (strcmp(my_id, other_id) < 0) ? 1 : 0;
 }
 
+// Processa uma mensagem NEIGHBOR recebida por TCP e associa o id remoto ao fd e trata duplicações.
 static void handle_neighbor_message(INFO_NO *no, int fd, const char *line)
 {
     char id[3] = "";
@@ -98,18 +115,19 @@ static void handle_neighbor_message(INFO_NO *no, int fd, const char *line)
         return;
     }
 
+    // descobrir que vizinho é este fd
     int idx = neighbor_find_by_fd(no, fd);
     if (idx == -1)
         return;
 
-    if (no->neighbors[idx].id[0] == '\0')
+    if (no->neighbors[idx].id[0] == '\0') // se ainda não tinha id, guardar agora
     {
         strncpy(no->neighbors[idx].id, id, sizeof(no->neighbors[idx].id) - 1);
         no->neighbors[idx].id[sizeof(no->neighbors[idx].id) - 1] = '\0';
         newly_identified = 1;
         printf("[OK] vizinho identificado: fd=%d id=%s\n", fd, id);
     }
-    else if (strcmp(no->neighbors[idx].id, id) != 0)
+    else if (strcmp(no->neighbors[idx].id, id) != 0) // se vier um id diferente no mesmo fd, há erro
     {
         printf("[ERRO] Mismatch de vizinho no fd=%d: esperado=%s, recebido=%s. A fechar ligação.\n",
                fd, no->neighbors[idx].id, id);
@@ -117,7 +135,7 @@ static void handle_neighbor_message(INFO_NO *no, int fd, const char *line)
         return;
     }
 
-    int other_idx = neighbor_find_by_id(no, id);
+    int other_idx = neighbor_find_by_id(no, id); // ver se já existe outro vizinho com o mesmo id
     if (other_idx != -1 && other_idx != idx)
     {
         int keep_out = prefer_outgoing(no->node_id, id);
@@ -137,12 +155,13 @@ static void handle_neighbor_message(INFO_NO *no, int fd, const char *line)
 
         drop_fd(no, drop_fd_val);
     }
-
+    // se acabou de ser identificado, avisar o routing
     if (newly_identified && neighbor_find_by_fd(no, fd) != -1)
         routing_on_new_neighbor(no, id);
 }
 
-static void handle_tcp_lines(INFO_NO *no, int fd)
+static void handle_tcp_lines(INFO_NO *no, int fd) 
+// Lê dados TCP, acumula no buffer do fd e processa linhas completas.
 {
     char tmp[512];
     int n = (int)read(fd, tmp, sizeof(tmp));
@@ -160,10 +179,10 @@ static void handle_tcp_lines(INFO_NO *no, int fd)
         return;
 
     int cap = (int)sizeof(rxbuf[fd]);
-    if (rxlen[fd] + n >= cap)
-        rxlen[fd] = 0; // defensivo
+    if (rxlen[fd] + n >= cap) // proteção p overflow
+        rxlen[fd] = 0; 
 
-    memcpy(rxbuf[fd] + rxlen[fd], tmp, (size_t)n);
+    memcpy(rxbuf[fd] + rxlen[fd], tmp, (size_t)n); // juntar ao buffer já recebido
     rxlen[fd] += n;
 
     int start = 0;
@@ -181,9 +200,10 @@ static void handle_tcp_lines(INFO_NO *no, int fd)
 
             memcpy(line, rxbuf[fd] + start, (size_t)len);
             line[len] = '\0';
-            if (len > 0 && line[len - 1] == '\r')
+            if (len > 0 && line[len - 1] == '\r') // tirar \r se existir
                 line[len - 1] = '\0';
-
+            
+            // encaminhar para o handler certo
             if (strncmp(line, "NEIGHBOR ", 9) == 0)
                 handle_neighbor_message(no, fd, line);
             else if (strncmp(line, "ROUTE ", 6) == 0)
@@ -201,7 +221,7 @@ static void handle_tcp_lines(INFO_NO *no, int fd)
         }
     }
 
-    if (start > 0)
+    if (start > 0) // manter no buffer só o que ainda não formou linha completa
     {
         int remaining = rxlen[fd] - start;
         if (remaining > 0)
@@ -210,6 +230,7 @@ static void handle_tcp_lines(INFO_NO *no, int fd)
     }
 }
 
+// Extrai destino e texto de um comando de mensagem. Exemplo: m 10 ola mundo
 static int extract_message_args(const char *buffer, char *dest, size_t dest_sz, char *msg, size_t msg_sz)
 {
     const char *p = buffer;
@@ -217,12 +238,13 @@ static int extract_message_args(const char *buffer, char *dest, size_t dest_sz, 
 
     while (*p == ' ' || *p == '\t')
         p++;
+    // saltar o nome do comando
     while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
         p++;
     while (*p == ' ' || *p == '\t')
         p++;
 
-    size_t di = 0;
+    size_t di = 0; // ler destino
     while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
     {
         if (di + 1 < dest_sz)
@@ -234,7 +256,7 @@ static int extract_message_args(const char *buffer, char *dest, size_t dest_sz, 
     while (*p == ' ' || *p == '\t')
         p++;
 
-    size_t mi = 0;
+    size_t mi = 0; // ler resto como mensagem
     while (*p && *p != '\r' && *p != '\n')
     {
         if (mi + 1 < msg_sz)
@@ -250,6 +272,9 @@ static int extract_message_args(const char *buffer, char *dest, size_t dest_sz, 
 
     return 0;
 }
+
+// Processa um comando introduzido pelo utilizador no terminal e retorna
+// 1 se o programa deve terminar senão retorna 0.
 
 static int processa_comandos(const char *buffer, INFO_NO *no)
 {
@@ -463,22 +488,25 @@ static int processa_comandos(const char *buffer, INFO_NO *no)
     return 0;
 }
 
+// Main: Inicializa o nó, cria o socket TCP de escuta e entra no ciclo principal
+// com select() para tratar stdin, accept() e mensagens TCP.
 int main(int argc, char **argv)
-{
+{ 
+    // validar a forma de invocação do programa
     if (testa_invocacao_programa(argc, argv))
         return 1;
 
     INFO_NO no;
-    inicializar_no(&no);
+    inicializar_no(&no);  // validar a forma de invocação do programa
 
-    strncpy(no.id.ip, argv[1], sizeof(no.id.ip) - 1);
+    strncpy(no.id.ip, argv[1], sizeof(no.id.ip) - 1);  // guardar IP e porto TCP do próprio nó
     no.id.ip[sizeof(no.id.ip) - 1] = '\0';
 
     strncpy(no.id.tcp, argv[2], sizeof(no.id.tcp) - 1);
     no.id.tcp[sizeof(no.id.tcp) - 1] = '\0';
 
     if (argc == 5)
-    {
+    {   // se vier IP e porto do registo na linha de comando, usar esses
         strncpy(regIP, argv[3], sizeof(regIP) - 1);
         regIP[sizeof(regIP) - 1] = '\0';
 
@@ -486,12 +514,15 @@ int main(int argc, char **argv)
         regUDP[sizeof(regUDP) - 1] = '\0';
     }
 
+    // preparar a criação do socket TCP de escuta:
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;
+    hints.ai_family = AF_INET; // IPV4
+    hints.ai_socktype = SOCK_STREAM; // TCP
+    hints.ai_flags = AI_PASSIVE; // aceitar ligações locais
 
+
+    // Criar socker TCP do servidor
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd == -1)
     {
@@ -499,16 +530,17 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    int yes = 1;
+    int yes = 1; // permitir reutilizar rapido o porto
     (void)setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 
     if (getaddrinfo(NULL, no.id.tcp, &hints, &res) != 0)
-    {
+    { // obter estrutura de endereço para o bind
         perror("getaddrinfo");
         close(listen_fd);
         return 1;
     }
 
+    // associar o socket ao porto TCP do nó
     if (bind(listen_fd, res->ai_addr, res->ai_addrlen) == -1)
     {
         perror("bind");
@@ -519,6 +551,7 @@ int main(int argc, char **argv)
 
     freeaddrinfo(res);
 
+    // colocar o socket em modo de escuta
     if (listen(listen_fd, 5) == -1)
     {
         perror("listen");
@@ -526,12 +559,17 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    no.id.fd = listen_fd;
+    no.id.fd = listen_fd; // guardar o fd do socket de escuta
+
+
+    // conjuntos usados pelo select:
+    // master_fds = todos os fds ativos
+    // read_fds   = cópia temporária usada em cada iteração
 
     fd_set master_fds, read_fds;
     FD_ZERO(&master_fds);
-    FD_SET(STDIN_FILENO, &master_fds);
-    FD_SET(listen_fd, &master_fds);
+    FD_SET(STDIN_FILENO, &master_fds); // ler comandos do terminal
+    FD_SET(listen_fd, &master_fds);  // ler comandos do terminal
 
     master_set = &master_fds;
     max_fd = max(STDIN_FILENO, listen_fd);
@@ -541,7 +579,7 @@ int main(int argc, char **argv)
     printf(" regIP/regUDP = %s:%s\n", regIP, regUDP);
     printf("========================================\n\n");
 
-    printf("Comandos:\n");
+    printf("Comandos:\n"); // lista de comandos disponíveis
     printf("  join (j) net id\n");
     printf("  direct join (dj) net id\n");
     printf("  show nodes (n) net\n");
@@ -559,9 +597,10 @@ int main(int argc, char **argv)
 
     print_prompt();
 
-    while (1)
+    while (1) // ciclo principal do programa
     {
-        read_fds = master_fds;
+        // o select altera o conjunto recebido, por isso fazemos sempre uma cópia
+        read_fds = master_fds; 
 
         int counter = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
         if (counter == -1)
@@ -570,23 +609,25 @@ int main(int argc, char **argv)
             break;
         }
 
+        // percorrer todos os descritores até ao maior
         for (int i = 0; i <= max_fd; i++)
         {
             if (!FD_ISSET(i, &read_fds))
                 continue;
 
-            if (i == STDIN_FILENO)
+            if (i == STDIN_FILENO)  // caso 1: houve input no terminal
             {
                 char buffer[TAMANHO_BUFFER];
-                if (fgets(buffer, sizeof(buffer), stdin) == NULL)
+                if (fgets(buffer, sizeof(buffer), stdin) == NULL) // ler linha de comando do utilizador
                 {
                     printf("\n");
+                     // se o utilizador fechar stdin, sair limpando a rede
                     if (no.joined)
                         (void)leave(&no, &master_fds, listen_fd, &max_fd);
                     close(listen_fd);
                     return 0;
                 }
-
+                // processar o comando introduzido
                 int want_exit = processa_comandos(buffer, &no);
                 if (want_exit)
                 {
@@ -598,6 +639,7 @@ int main(int argc, char **argv)
 
                 print_prompt();
             }
+            // caso 2: chegou uma nova ligação ao socket de escuta
             else if (i == listen_fd)
             {
                 struct sockaddr_storage addr;
@@ -609,23 +651,22 @@ int main(int argc, char **argv)
                 }
                 else
                 {
-                    /* CORREÇÃO: se o nó não está numa rede, não pode aceitar arestas */
-                    if (!no.joined)
+                    if (!no.joined) // só aceitar vizinhos se o nó já estiver numa rede
                     {
                         printf("[AVISO] Ligação recebida fora de rede; a rejeitar fd=%d.\n", new_fd);
                         close(new_fd);
                         continue;
                     }
-                    int slot = neighbor_alloc_slot(&no);
+                    int slot = neighbor_alloc_slot(&no);  // procurar espaço livre na tabela de vizinhos
                     if (slot == -1)
                     {
                         printf("[ERRO] Sem slots para vizinhos — a fechar ligação (fd=%d).\n", new_fd);
                         close(new_fd);
                     }
-                    else
-                    {
+                    else 
+                    { // inicializar a nova entrada de vizinho
                         no.neighbors[slot].fd = new_fd;
-                        no.neighbors[slot].outgoing = 0;
+                        no.neighbors[slot].outgoing = 0; // esta ligação foi aceite, não iniciada por nós
                         no.neighbors[slot].id[0] = '\0';
                         no.neighbors[slot].ip[0] = '\0';
                         no.neighbors[slot].tcp[0] = '\0';
@@ -642,11 +683,11 @@ int main(int argc, char **argv)
                                           no.neighbors[slot].ip, sizeof(no.neighbors[slot].ip));
                             }
                         }
-                        FD_SET(new_fd, &master_fds);
+                        FD_SET(new_fd, &master_fds); // passar a monitorizar este novo fd no select
                         if (new_fd > max_fd)
                             max_fd = new_fd;
 
-                        // envia o nosso id
+                        // envia o nosso id - NEIGHBOR
 
                         char msg[32];
                         int n = snprintf(msg, sizeof(msg), "NEIGHBOR %s\n", no.node_id);
@@ -657,14 +698,14 @@ int main(int argc, char **argv)
                     }
                 }
             }
-            else
+            else  // caso 3: chegou informação numa ligação TCP já existente
             {
                 handle_tcp_lines(&no, i);
             }
         }
     }
 
-    if (no.joined)
+    if (no.joined) // se sair do ciclo principal por erro, tentar sair da rede corretamente
         (void)leave(&no, &master_fds, listen_fd, &max_fd);
     close(listen_fd);
     return 0;
